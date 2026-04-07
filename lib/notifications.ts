@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
+import { scheduledDateMatchesTodayMonthDay } from './scheduledQuestion';
 import { supabase } from './supabase';
 
 Notifications.setNotificationHandler({
@@ -15,13 +16,6 @@ Notifications.setNotificationHandler({
 
 const DAILY_QUESTION_NOTIFICATION_ID = 'daily-question-8am';
 const STREAK_REMINDER_NOTIFICATION_ID = 'streak-reminder-8pm';
-
-function formatLocalDateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
 
 function getDayOfYear(date: Date): number {
   const start = new Date(date.getFullYear(), 0, 0);
@@ -47,26 +41,26 @@ function readQuestionTextFromRow(questionRow: Record<string, unknown>): string |
 
 async function resolveTodayQuestionRow(): Promise<Record<string, unknown> | null> {
   const today = new Date();
-  const todayKey = formatLocalDateKey(today);
-
-  const { data: scheduledQuestion, error: scheduledError } = await supabase
-    .from('questions')
-    .select('*')
-    .eq('scheduled_date', todayKey)
-    .limit(1)
-    .maybeSingle();
-
-  if (!scheduledError && scheduledQuestion) {
-    const text = readQuestionTextFromRow(scheduledQuestion as Record<string, unknown>);
-    if (text) {
-      return scheduledQuestion as Record<string, unknown>;
-    }
-  }
 
   const { data: allQuestions, error: allQuestionsError } = await supabase.from('questions').select('*');
 
   if (allQuestionsError || !allQuestions || allQuestions.length === 0) {
     return null;
+  }
+
+  const scheduledMatch = allQuestions.find((row) => {
+    const rowMap = row as Record<string, unknown>;
+    if (rowMap.scheduled_date == null) {
+      return false;
+    }
+    if (!scheduledDateMatchesTodayMonthDay(rowMap.scheduled_date, today)) {
+      return false;
+    }
+    return Boolean(readQuestionTextFromRow(rowMap));
+  });
+
+  if (scheduledMatch) {
+    return scheduledMatch as Record<string, unknown>;
   }
 
   const validQuestions = allQuestions

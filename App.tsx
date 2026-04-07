@@ -37,6 +37,7 @@ import {
 } from './lib/notifications';
 // DB migration for Expo push tokens (run in Supabase SQL editor):
 // -- ALTER TABLE profiles ADD COLUMN IF NOT EXISTS push_token text;
+import { scheduledDateMatchesTodayMonthDay } from './lib/scheduledQuestion';
 import { supabase } from './lib/supabase';
 
 type MainTabParamList = {
@@ -106,26 +107,26 @@ function readAnswerTextFromRow(answerRow: Record<string, unknown>): string {
 
 async function resolveTodayQuestionRow(): Promise<Record<string, unknown> | null> {
   const today = new Date();
-  const todayKey = formatLocalDateKey(today);
-
-  const { data: scheduledQuestion, error: scheduledError } = await supabase
-    .from('questions')
-    .select('*')
-    .eq('scheduled_date', todayKey)
-    .limit(1)
-    .maybeSingle();
-
-  if (!scheduledError && scheduledQuestion) {
-    const text = readQuestionTextFromRow(scheduledQuestion as Record<string, unknown>);
-    if (text) {
-      return scheduledQuestion as Record<string, unknown>;
-    }
-  }
 
   const { data: allQuestions, error: allQuestionsError } = await supabase.from('questions').select('*');
 
   if (allQuestionsError || !allQuestions || allQuestions.length === 0) {
     return null;
+  }
+
+  const scheduledMatch = allQuestions.find((row) => {
+    const rowMap = row as Record<string, unknown>;
+    if (rowMap.scheduled_date == null) {
+      return false;
+    }
+    if (!scheduledDateMatchesTodayMonthDay(rowMap.scheduled_date, today)) {
+      return false;
+    }
+    return Boolean(readQuestionTextFromRow(rowMap));
+  });
+
+  if (scheduledMatch) {
+    return scheduledMatch as Record<string, unknown>;
   }
 
   const validQuestions = allQuestions
@@ -657,31 +658,32 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
 
     const selectTodaysQuestion = async (): Promise<Record<string, unknown> | null> => {
       const today = new Date();
-      const todayKey = formatLocalDateKey(today);
 
-      // 1) Special-date override: exact scheduled question for today's date.
-      const { data: scheduledQuestion, error: scheduledError } = await supabase
-        .from('questions')
-        .select('*')
-        .eq('scheduled_date', todayKey)
-        .limit(1)
-        .maybeSingle();
-
-      if (!scheduledError && scheduledQuestion) {
-        const scheduledText = readQuestionText(scheduledQuestion as Record<string, unknown>);
-        if (scheduledText) {
-          setDailyQuestion(scheduledText);
-          return scheduledQuestion as Record<string, unknown>;
-        }
-      }
-
-      // 2) No special question today: cycle deterministically through all questions.
       const { data: allQuestions, error: allQuestionsError } = await supabase
         .from('questions')
         .select('*');
 
       if (allQuestionsError || !allQuestions || allQuestions.length === 0) {
         return null;
+      }
+
+      const scheduledMatch = allQuestions.find((row) => {
+        const rowMap = row as Record<string, unknown>;
+        if (rowMap.scheduled_date == null) {
+          return false;
+        }
+        if (!scheduledDateMatchesTodayMonthDay(rowMap.scheduled_date, today)) {
+          return false;
+        }
+        return Boolean(readQuestionText(rowMap));
+      });
+
+      if (scheduledMatch) {
+        const scheduledText = readQuestionText(scheduledMatch as Record<string, unknown>);
+        if (scheduledText) {
+          setDailyQuestion(scheduledText);
+          return scheduledMatch as Record<string, unknown>;
+        }
       }
 
       const validQuestions = allQuestions
