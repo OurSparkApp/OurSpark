@@ -67,6 +67,21 @@ function readQuestionTextFromRow(questionRow: Record<string, unknown>): string |
   return null;
 }
 
+function readAnswerTextFromRow(answerRow: Record<string, unknown>): string {
+  const candidates = [
+    answerRow.answer_text,
+    answerRow.answer,
+    answerRow.response_text,
+    answerRow.text,
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
 async function resolveTodayQuestionRow(): Promise<Record<string, unknown> | null> {
   const today = new Date();
   const todayKey = formatLocalDateKey(today);
@@ -285,7 +300,7 @@ function DashboardScreen({ userId }: { userId: string }) {
     navigation.navigate('Question');
   };
 
-  const greeting = `${getGreetingPrefix(new Date())}, ${firstName} ☀️`;
+  const greeting = `${getGreetingPrefix(new Date())}, ${firstName}`;
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -307,7 +322,10 @@ function DashboardScreen({ userId }: { userId: string }) {
           <Text style={styles.dbStatusSmall}>{"TODAY'S QUESTION"}</Text>
           {todayStatus === 'not_answered' ? (
             <>
-              <Text style={styles.dbTodayTitle}>Your question is waiting... 💭</Text>
+              <View style={styles.dbTitleIconRow}>
+                <Ionicons name="chatbubble-outline" size={20} color={CREAM} />
+                <Text style={styles.dbTodayTitle}>Your question is waiting...</Text>
+              </View>
               <TouchableOpacity activeOpacity={0.92} style={styles.dbAnswerNowBtn} onPress={goToToday}>
                 <Text style={styles.dbAnswerNowText}>Answer Now</Text>
               </TouchableOpacity>
@@ -315,7 +333,10 @@ function DashboardScreen({ userId }: { userId: string }) {
           ) : null}
           {todayStatus === 'waiting' ? (
             <>
-              <Text style={styles.dbTodayTitleLocked}>Answer locked in! 🔒</Text>
+              <View style={styles.dbTitleIconRowTight}>
+                <Ionicons name="lock-closed-outline" size={20} color={ORANGE} />
+                <Text style={styles.dbTodayTitleLocked}>Answer locked in!</Text>
+              </View>
               <Text style={styles.dbWaitingSub}>Waiting for your partner...</Text>
               <View style={styles.dbPulseRow}>
                 <Animated.View style={[styles.dbPulseDot, { opacity: pulseOpacity }]} />
@@ -324,9 +345,12 @@ function DashboardScreen({ userId }: { userId: string }) {
           ) : null}
           {todayStatus === 'reveal_ready' ? (
             <View style={styles.dbRevealReadyWrap}>
-              <Text style={styles.dbTodayTitleReveal}>Your reveal is ready! ✨</Text>
+              <View style={styles.dbTitleIconRow}>
+                <Ionicons name="sparkles-outline" size={24} color={ORANGE} />
+                <Text style={styles.dbTodayTitleReveal}>Your reveal is ready!</Text>
+              </View>
               <TouchableOpacity activeOpacity={0.92} style={styles.dbSeeRevealBtn} onPress={goToToday}>
-                <Text style={styles.dbSeeRevealText}>See The Reveal 🔥</Text>
+                <Text style={styles.dbSeeRevealText}>See The Reveal</Text>
               </TouchableOpacity>
             </View>
           ) : null}
@@ -345,7 +369,7 @@ function DashboardScreen({ userId }: { userId: string }) {
             )}
           </View>
           <View style={styles.dbHalfCard}>
-            <Text style={styles.dbStatEmoji}>✨</Text>
+            <Ionicons name="sparkles-outline" size={24} color={ORANGE} style={styles.dbStatIconTop} />
             {compatibilityScore > 0 ? (
               <>
                 <Text style={styles.dbStatNumberCompat}>{compatibilityScore}%</Text>
@@ -358,7 +382,10 @@ function DashboardScreen({ userId }: { userId: string }) {
         </View>
 
         <TouchableOpacity activeOpacity={0.9} style={styles.dbVaultCard} onPress={() => {}}>
-          <Text style={styles.dbVaultTitle}>💛 Your Spark Vault</Text>
+          <View style={styles.dbVaultTitleRow}>
+            <Ionicons name="heart-outline" size={22} color={CREAM} />
+            <Text style={styles.dbVaultTitle}>Your Spark Vault</Text>
+          </View>
           {vaultCount > 0 ? (
             <Text style={styles.dbVaultSub}>
               {vaultCount} Perfect Sync moment{vaultCount === 1 ? '' : 's'} saved
@@ -706,7 +733,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   const shareSparkMoment = async () => {
     await Share.share({
       message:
-        'We just had a spark moment on OurSpark 🔥 Download the app: https://oursparkapp.com',
+        'We just had a spark moment on OurSpark. Download the app: https://oursparkapp.com',
     });
   };
 
@@ -734,7 +761,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
             <>
               <TextInput
                 style={styles.answerInput}
-                placeholder="Type your answer here... be honest 💭"
+                placeholder="Type your answer here... be honest"
                 placeholderTextColor={`${CREAM}99`}
                 value={answer}
                 onChangeText={setAnswer}
@@ -747,7 +774,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
                 onPress={submitAnswer}
                 disabled={isSubmitting}
               >
-                <Text style={styles.inviteActionButtonText}>Reveal Together</Text>
+                <Text style={styles.inviteActionButtonText}>Lock In My Answer</Text>
               </TouchableOpacity>
             </>
           ) : null}
@@ -760,7 +787,10 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
 
           {dailyState === 'reveal' ? (
             <View style={styles.revealWrap}>
-              <Text style={styles.revealHeading}>✨ Today&apos;s Reveal</Text>
+              <View style={styles.revealHeadingRow}>
+                <Ionicons name="sparkles-outline" size={24} color={ORANGE} />
+                <Text style={styles.revealHeading}>Today&apos;s Reveal</Text>
+              </View>
               <View style={styles.revealCard}>
                 <Text style={styles.revealYouLabel}>You said:</Text>
                 <Text style={styles.revealBodyText}>{myAnswer}</Text>
@@ -770,10 +800,10 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
                 <Text style={styles.revealBodyText}>{partnerAnswer}</Text>
               </View>
               <TouchableOpacity activeOpacity={0.9} style={styles.vaultButton}>
-                <Text style={styles.inviteActionButtonText}>Save to Vault 💛</Text>
+                <Text style={styles.inviteActionButtonText}>Save to Vault</Text>
               </TouchableOpacity>
               <TouchableOpacity activeOpacity={0.9} style={styles.shareSparkButton} onPress={shareSparkMoment}>
-                <Text style={styles.inviteActionButtonText}>Share Our Spark 🔥</Text>
+                <Text style={styles.inviteActionButtonText}>Share Our Spark</Text>
               </TouchableOpacity>
             </View>
           ) : null}
@@ -925,11 +955,11 @@ function InviteCodeScreen({ userId, onComplete }: { userId: string; onComplete: 
     }
 
     await Share.share({
-      message: `💕 I'm using OurSpark to connect with you every day. Download the app and use my code ${inviteCode} to join me! 
+      message: `I'm using OurSpark to connect with you every day. Download the app and use my code ${inviteCode} to join me.
 
 Download here: https://ourspark.app (coming soon)
 
-One question a day. Answered together. 🔥`,
+One question a day. Answered together.`,
     });
   };
 
@@ -1126,6 +1156,233 @@ function AuthScreen({
   );
 }
 
+type VaultMomentDisplay = {
+  id: string;
+  questionText: string;
+  youSaid: string;
+  theySaid: string;
+  savedAtLabel: string;
+};
+
+function VaultScreen({ userId }: { userId: string }) {
+  const navigation = useNavigation<BottomTabNavigationProp<any>>();
+  const [loading, setLoading] = useState(true);
+  const [moments, setMoments] = useState<VaultMomentDisplay[]>([]);
+  const [firstVaultDateLabel, setFirstVaultDateLabel] = useState('');
+
+  const loadVault = useCallback(async () => {
+    setLoading(true);
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('couple_id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (!profile?.couple_id) {
+      setMoments([]);
+      setFirstVaultDateLabel('');
+      setLoading(false);
+      return;
+    }
+
+    const coupleId = String(profile.couple_id);
+
+    const { data: vaultRows, error: vaultError } = await supabase
+      .from('vault')
+      .select('*')
+      .eq('couple_id', coupleId)
+      .order('saved_at', { ascending: false });
+
+    if (vaultError || !vaultRows?.length) {
+      setMoments([]);
+      setFirstVaultDateLabel('');
+      setLoading(false);
+      return;
+    }
+
+    const questionIds = [
+      ...new Set(
+        vaultRows
+          .map((row) => {
+            const r = row as Record<string, unknown>;
+            return r.question_id != null ? String(r.question_id) : '';
+          })
+          .filter(Boolean)
+      ),
+    ];
+
+    const { data: questionRows } =
+      questionIds.length > 0
+        ? await supabase.from('questions').select('*').in('id', questionIds)
+        : { data: [] as Record<string, unknown>[] };
+
+    const questionTextById = new Map<string, string>();
+    (questionRows ?? []).forEach((q) => {
+      const qm = q as Record<string, unknown>;
+      const id = qm.id != null ? String(qm.id) : '';
+      const text = readQuestionTextFromRow(qm);
+      if (id && text) {
+        questionTextById.set(id, text);
+      }
+    });
+
+    const { data: answerRows } =
+      questionIds.length > 0
+        ? await supabase
+            .from('answers')
+            .select('*')
+            .eq('couple_id', coupleId)
+            .in('question_id', questionIds)
+        : { data: [] as Record<string, unknown>[] };
+
+    const answersByQuestionId = new Map<string, Record<string, unknown>[]>();
+    (answerRows ?? []).forEach((a) => {
+      const am = a as Record<string, unknown>;
+      const qid = am.question_id != null ? String(am.question_id) : '';
+      if (!qid) {
+        return;
+      }
+      const list = answersByQuestionId.get(qid) ?? [];
+      list.push(am);
+      answersByQuestionId.set(qid, list);
+    });
+
+    const built: VaultMomentDisplay[] = vaultRows.map((row) => {
+      const r = row as Record<string, unknown>;
+      const qid = r.question_id != null ? String(r.question_id) : '';
+      const list = answersByQuestionId.get(qid) ?? [];
+      const mine = list.find((ans) => String(ans.user_id ?? '') === userId);
+      const partner = list.find((ans) => String(ans.user_id ?? '') !== userId);
+      const rawSaved = r.saved_at ?? r.created_at;
+      const savedDate = rawSaved ? new Date(String(rawSaved)) : new Date();
+      const savedAtLabel = savedDate.toLocaleDateString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+
+      return {
+        id: String(r.id ?? Math.random()),
+        questionText: questionTextById.get(qid) ?? '—',
+        youSaid: readAnswerTextFromRow(mine ?? {}),
+        theySaid: readAnswerTextFromRow(partner ?? {}),
+        savedAtLabel,
+      };
+    });
+
+    const oldest = [...vaultRows].sort((a, b) => {
+      const ra = (a as Record<string, unknown>).saved_at ?? (a as Record<string, unknown>).created_at;
+      const rb = (b as Record<string, unknown>).saved_at ?? (b as Record<string, unknown>).created_at;
+      const ta = ra ? new Date(String(ra)).getTime() : 0;
+      const tb = rb ? new Date(String(rb)).getTime() : 0;
+      return ta - tb;
+    })[0];
+    const oldestRaw = oldest
+      ? (oldest as Record<string, unknown>).saved_at ?? (oldest as Record<string, unknown>).created_at
+      : null;
+    if (oldestRaw) {
+      const d = new Date(String(oldestRaw));
+      setFirstVaultDateLabel(
+        d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+      );
+    } else {
+      setFirstVaultDateLabel('');
+    }
+
+    setMoments(built);
+    setLoading(false);
+  }, [userId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadVault();
+    }, [loadVault])
+  );
+
+  const goToToday = () => {
+    navigation.navigate('Question');
+  };
+
+  return (
+    <SafeAreaView style={styles.screen} edges={['top']}>
+      <ScrollView
+        style={styles.flex}
+        contentContainerStyle={
+          !loading && moments.length === 0 ? styles.vaultScrollEmpty : styles.vaultScroll
+        }
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={styles.vaultHeaderTitle}>Your Spark Vault</Text>
+        <Text style={styles.vaultHeaderSub}>
+          {"Every moment you've been perfectly in sync."}
+        </Text>
+
+        {!loading && moments.length > 0 ? (
+          <View style={styles.vaultStatsBar}>
+            <View style={styles.vaultStatsRowLeft}>
+              <Ionicons name="flash-outline" size={20} color={ORANGE} />
+              <Text style={styles.vaultStatsFire}>{moments.length} Perfect Syncs</Text>
+            </View>
+            <View style={styles.vaultStatsRowRight}>
+              <Ionicons name="calendar-outline" size={16} color={CREAM} />
+              <Text style={styles.vaultStatsSince}>Since {firstVaultDateLabel || '—'}</Text>
+            </View>
+          </View>
+        ) : null}
+
+        {loading ? (
+          <View style={styles.vaultLoadingWrap}>
+            <ActivityIndicator size="large" color={PURPLE} />
+          </View>
+        ) : null}
+
+        {!loading && moments.length === 0 ? (
+          <View style={styles.vaultEmptyInner}>
+            <Ionicons name="heart-outline" size={60} color={CREAM} style={styles.vaultEmptyHeartIcon} />
+            <Text style={styles.vaultEmptyTitle}>Your first Perfect Sync moment will live here</Text>
+            <Text style={styles.vaultEmptySub}>
+              {"Answer today's question together to start building your Vault"}
+            </Text>
+            <TouchableOpacity activeOpacity={0.92} style={styles.vaultEmptyBtn} onPress={goToToday}>
+              <Text style={styles.vaultEmptyBtnText}>{"Answer Today's Question"}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {!loading && moments.length > 0 ? (
+          <View style={styles.vaultListWrap}>
+            {moments.map((m, index) => (
+              <View key={m.id} style={styles.vaultMomentCard}>
+                <View style={styles.vaultCardCornerIcon}>
+                  <Ionicons
+                    name={index % 2 === 0 ? 'flash-outline' : 'sparkles-outline'}
+                    size={16}
+                    color={ORANGE}
+                  />
+                </View>
+                <Text style={styles.vaultCardQuestion}>{m.questionText}</Text>
+                <View style={styles.vaultCardDivider} />
+                <View style={styles.vaultAnswersRow}>
+                  <View style={styles.vaultAnswerCol}>
+                    <Text style={styles.vaultYouLabel}>You said:</Text>
+                    <Text style={styles.vaultAnswerBody}>{m.youSaid || '—'}</Text>
+                  </View>
+                  <View style={styles.vaultAnswerCol}>
+                    <Text style={styles.vaultTheyLabel}>They said:</Text>
+                    <Text style={styles.vaultAnswerBody}>{m.theySaid || '—'}</Text>
+                  </View>
+                </View>
+                <Text style={styles.vaultCardDate}>{m.savedAtLabel}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
 function MainTabs({ userId }: { userId: string }) {
   return (
     <Tab.Navigator
@@ -1151,11 +1408,7 @@ function MainTabs({ userId }: { userId: string }) {
         name="Dashboard"
         options={{
           tabBarLabel: 'Dashboard',
-          tabBarIcon: ({ color }) => (
-            <Text style={[styles.tabIcon, { color }]} allowFontScaling={false}>
-              🏠
-            </Text>
-          ),
+          tabBarIcon: ({ color }) => <Ionicons name="grid-outline" size={24} color={color} />,
         }}
       >
         {() => <DashboardScreen userId={userId} />}
@@ -1164,14 +1417,19 @@ function MainTabs({ userId }: { userId: string }) {
         name="Question"
         options={{
           tabBarLabel: 'Today',
-          tabBarIcon: ({ color }) => (
-            <Text style={[styles.tabIcon, { color }]} allowFontScaling={false}>
-              ✨
-            </Text>
-          ),
+          tabBarIcon: ({ color }) => <Ionicons name="sunny-outline" size={24} color={color} />,
         }}
       >
         {() => <DailyQuestionScreen userId={userId} />}
+      </Tab.Screen>
+      <Tab.Screen
+        name="Vault"
+        options={{
+          tabBarLabel: 'Vault',
+          tabBarIcon: ({ color }) => <Ionicons name="heart-outline" size={24} color={color} />,
+        }}
+      >
+        {() => <VaultScreen userId={userId} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
@@ -1751,26 +2009,43 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 10,
   },
+  dbTitleIconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 16,
+  },
+  dbTitleIconRowTight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
   dbTodayTitle: {
     fontFamily: FONT_HEADING,
     color: CREAM,
     fontSize: 22,
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 0,
+    flexShrink: 1,
   },
   dbTodayTitleLocked: {
     fontFamily: FONT_HEADING,
     color: ORANGE,
     fontSize: 22,
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: 0,
+    flexShrink: 1,
   },
   dbTodayTitleReveal: {
     fontFamily: FONT_HEADING,
     color: ORANGE,
     fontSize: 22,
     textAlign: 'center',
-    marginBottom: 16,
+    marginBottom: 0,
+    flexShrink: 1,
   },
   dbWaitingSub: {
     fontFamily: FONT_BODY,
@@ -1864,11 +2139,21 @@ const styles = StyleSheet.create({
     margin: 16,
     padding: 20,
   },
+  dbVaultTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
   dbVaultTitle: {
     fontFamily: FONT_HEADING,
     color: CREAM,
     fontSize: 18,
     textAlign: 'center',
+    marginBottom: 0,
+  },
+  dbStatIconTop: {
     marginBottom: 8,
   },
   dbVaultSub: {
@@ -2026,12 +2311,19 @@ const styles = StyleSheet.create({
     marginTop: 20,
     gap: 12,
   },
+  revealHeadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
   revealHeading: {
     fontFamily: FONT_HEADING,
     color: ORANGE,
-    fontSize: 30,
+    fontSize: 28,
     textAlign: 'center',
-    marginBottom: 4,
+    marginBottom: 0,
   },
   revealCard: {
     backgroundColor: CARD_BG,
@@ -2076,8 +2368,166 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  tabIcon: {
-    fontSize: 20,
-    marginBottom: -2,
+  vaultScroll: {
+    paddingBottom: 32,
+  },
+  vaultScrollEmpty: {
+    flexGrow: 1,
+    minHeight: Dimensions.get('window').height * 0.72,
+    justifyContent: 'center',
+    paddingBottom: 24,
+  },
+  vaultHeaderTitle: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 28,
+    textAlign: 'left',
+    paddingTop: 60,
+    paddingHorizontal: 24,
+  },
+  vaultHeaderSub: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    fontSize: 15,
+    textAlign: 'left',
+    paddingHorizontal: 24,
+    paddingBottom: 16,
+  },
+  vaultStatsBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 8,
+    backgroundColor: CARD_BG,
+    padding: 12,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 12,
+  },
+  vaultStatsRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  vaultStatsRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  vaultStatsFire: {
+    fontFamily: FONT_BODY,
+    color: ORANGE,
+    fontSize: 13,
+  },
+  vaultStatsSince: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 13,
+  },
+  vaultLoadingWrap: {
+    paddingVertical: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  vaultEmptyInner: {
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+  },
+  vaultEmptyHeartIcon: {
+    marginBottom: 12,
+  },
+  vaultEmptyTitle: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 22,
+    textAlign: 'center',
+    padding: 24,
+  },
+  vaultEmptySub: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 15,
+    textAlign: 'center',
+    padding: 16,
+    lineHeight: 22,
+  },
+  vaultEmptyBtn: {
+    backgroundColor: '#F48F4F',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    marginTop: 8,
+  },
+  vaultEmptyBtnText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 16,
+  },
+  vaultListWrap: {
+    paddingHorizontal: 4,
+    paddingBottom: 24,
+  },
+  vaultMomentCard: {
+    position: 'relative',
+    backgroundColor: CARD_BG,
+    borderRadius: 16,
+    margin: 12,
+    padding: 20,
+    paddingTop: 28,
+  },
+  vaultCardCornerIcon: {
+    position: 'absolute',
+    top: 12,
+    right: 14,
+  },
+  vaultCardQuestion: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    fontSize: 14,
+    fontStyle: 'italic',
+    paddingRight: 28,
+    marginBottom: 10,
+  },
+  vaultCardDivider: {
+    height: 1,
+    backgroundColor: `${PURPLE}4D`,
+    marginBottom: 12,
+  },
+  vaultAnswersRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  vaultAnswerCol: {
+    flex: 1,
+    minWidth: 120,
+  },
+  vaultYouLabel: {
+    fontFamily: FONT_BODY,
+    color: ORANGE,
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  vaultTheyLabel: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  vaultAnswerBody: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  vaultCardDate: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 11,
+    opacity: 0.6,
+    textAlign: 'right',
+    marginTop: 14,
+    alignSelf: 'stretch',
   },
 });
