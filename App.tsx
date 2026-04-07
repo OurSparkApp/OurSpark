@@ -13,12 +13,16 @@ import * as Notifications from 'expo-notifications';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as MediaLibrary from 'expo-media-library';
+import ViewShot from 'react-native-view-shot';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   Share,
@@ -288,6 +292,29 @@ function getAnswerMatchMeta(a: string, b: string): {
   };
 }
 
+/** Weekly streak milestones: 7, 14, 21, … (every 7 days). */
+function isWeeklyStreakMilestone(streak: number): boolean {
+  return streak >= 7 && streak % 7 === 0;
+}
+
+/** Milestone share card heading (CARD 2). */
+function getMilestoneCardHeading(streak: number): string {
+  switch (streak) {
+    case 7:
+      return 'One Week In Sync';
+    case 14:
+      return 'Two Weeks Strong';
+    case 21:
+      return 'Three Weeks Together';
+    case 28:
+      return 'One Month In Sync';
+    default:
+      return `${streak / 7} Weeks Connected`;
+  }
+}
+
+type MilestoneData = { streak: number; partnerName: string };
+
 function HomeButton({ label, onPress }: { label: string; onPress?: () => void }) {
   return (
     <TouchableOpacity activeOpacity={0.92} style={styles.homeCtaButton} onPress={onPress}>
@@ -553,6 +580,20 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   const vaultSaveBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dailyLoadReady, setDailyLoadReady] = useState(false);
   const [partnerName, setPartnerName] = useState<string>('Your partner');
+  const partnerNameRef = useRef(partnerName);
+  const [showMilestoneModal, setShowMilestoneModal] = useState(false);
+  const [showPerfectSyncModal, setShowPerfectSyncModal] = useState(false);
+  const [milestoneData, setMilestoneData] = useState<MilestoneData | null>(null);
+  const pendingMilestoneRef = useRef<MilestoneData | null>(null);
+  const perfectSyncModalShownKeyRef = useRef<string | null>(null);
+  const perfectSyncOpacity = useRef(new Animated.Value(0)).current;
+  const milestoneModalOpacity = useRef(new Animated.Value(0)).current;
+  const perfectSyncCardRef = useRef<ViewShot | null>(null);
+  const milestoneCardRef = useRef<ViewShot | null>(null);
+
+  useEffect(() => {
+    partnerNameRef.current = partnerName;
+  }, [partnerName]);
 
   const answerMatchMeta = useMemo(
     () => getAnswerMatchMeta(myAnswer, partnerAnswer),
@@ -619,7 +660,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
     const nextTotalMatches = Number(couple.total_matches ?? 0) + (isMatch ? 1 : 0);
     const nextCompatibility = Math.round((nextTotalMatches / nextTotalAnswered) * 100);
 
-    await supabase
+    const { error: updateError } = await supabase
       .from('couples')
       .update({
         current_streak: nextStreak,
@@ -630,6 +671,125 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
         compatibility_score: nextCompatibility,
       })
       .eq('id', coupleId);
+
+    if (updateError) {
+      return;
+    }
+
+    if (isWeeklyStreakMilestone(nextStreak)) {
+      const data: MilestoneData = {
+        streak: nextStreak,
+        partnerName: partnerNameRef.current,
+      };
+      const matchMeta = getAnswerMatchMeta(myText, theirText);
+      if (matchMeta.tier === 'perfect') {
+        pendingMilestoneRef.current = data;
+      } else {
+        setMilestoneData(data);
+        setShowMilestoneModal(true);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!dailyLoadReady || dailyState !== 'reveal' || answerMatchMeta.tier !== 'perfect' || !questionId) {
+      return;
+    }
+    const key = `${questionId}-${formatLocalDateKey(new Date())}`;
+    if (perfectSyncModalShownKeyRef.current === key) {
+      return;
+    }
+    perfectSyncModalShownKeyRef.current = key;
+    setShowPerfectSyncModal(true);
+  }, [dailyLoadReady, dailyState, answerMatchMeta.tier, questionId]);
+
+  useEffect(() => {
+    if (!showPerfectSyncModal) {
+      return;
+    }
+    perfectSyncOpacity.setValue(0);
+    Animated.timing(perfectSyncOpacity, {
+      toValue: 1,
+      duration: 400,
+      useNativeDriver: true,
+    }).start();
+  }, [showPerfectSyncModal]);
+
+  useEffect(() => {
+    if (!showMilestoneModal) {
+      return;
+    }
+    milestoneModalOpacity.setValue(0);
+    Animated.timing(milestoneModalOpacity, {
+      toValue: 1,
+      duration: 400,
+      useNativeDriver: true,
+    }).start();
+  }, [showMilestoneModal]);
+
+  const dismissPerfectSyncModal = () => {
+    Animated.timing(perfectSyncOpacity, {
+      toValue: 0,
+      duration: 400,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowPerfectSyncModal(false);
+      if (pendingMilestoneRef.current) {
+        setMilestoneData(pendingMilestoneRef.current);
+        pendingMilestoneRef.current = null;
+        setShowMilestoneModal(true);
+      }
+    });
+  };
+
+  const dismissMilestoneModal = () => {
+    Animated.timing(milestoneModalOpacity, {
+      toValue: 0,
+      duration: 400,
+      useNativeDriver: true,
+    }).start(() => {
+      setShowMilestoneModal(false);
+    });
+  };
+
+  const onSavePerfectSyncCard = async () => {
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Please allow access to your camera roll in Settings.');
+        return;
+      }
+      const shot = perfectSyncCardRef.current;
+      if (!shot?.capture) {
+        Alert.alert('Could not capture the card. Please try again.');
+        return;
+      }
+      const uri = await shot.capture();
+      await MediaLibrary.saveToLibraryAsync(uri);
+      Alert.alert('Saved to your camera roll! Share it on Instagram Stories.');
+    } catch {
+      Alert.alert('Could not save the image. Please try again.');
+    }
+  };
+
+  const onSaveMilestoneCard = async () => {
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Please allow access to your camera roll in Settings.');
+        return;
+      }
+      const shot = milestoneCardRef.current;
+      if (!shot?.capture) {
+        Alert.alert('Could not capture the card. Please try again.');
+        return;
+      }
+      const uri = await shot.capture();
+      await MediaLibrary.saveToLibraryAsync(uri);
+      Alert.alert('Saved to your camera roll! Share it on Instagram Stories.');
+    } catch {
+      Alert.alert('Could not save the image. Please try again.');
+    }
   };
 
   useEffect(() => {
@@ -984,22 +1144,6 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
     setDailyState('waiting');
   };
 
-  const shareSparkMoment = async () => {
-    await Share.share({
-      message:
-        'We just had a spark moment on OurSpark. Download the app: https://oursparkapp.com',
-    });
-  };
-
-  const shareOurResult = async () => {
-    const msg = `We just sparked on OurSpark! 🔥
-
-Our result: ${answerMatchMeta.label}
-
-Answer one question together every day. Download OurSpark: https://oursparkapp.com`;
-    await Share.share({ message: msg });
-  };
-
   const saveToVault = async () => {
     if (!coupleId || !questionId) {
       return;
@@ -1096,46 +1240,6 @@ Answer one question together every day. Download OurSpark: https://oursparkapp.c
                 <Text style={styles.revealBodyText}>{partnerAnswer}</Text>
               </View>
 
-              <View style={styles.shareResultCardWrap}>
-                <View style={styles.shareResultCard}>
-                  <Image
-                    source={HOME_LOGO}
-                    style={styles.shareResultLogo}
-                    resizeMode="contain"
-                  />
-                  <Text style={styles.shareResultHeadline}>We just sparked</Text>
-                  <Text style={styles.shareResultDate}>{todayLabel}</Text>
-                  <View style={styles.shareResultCirclesRow}>
-                    {[0, 1, 2, 3, 4].map((i) => (
-                      <View
-                        key={i}
-                        style={[
-                          styles.shareResultCircle,
-                          i < answerMatchMeta.filledCircles
-                            ? styles.shareResultCircleFilled
-                            : styles.shareResultCircleOutline,
-                        ]}
-                      />
-                    ))}
-                  </View>
-                  <Text style={[styles.shareResultLabel, { color: answerMatchMeta.labelColor }]}>
-                    {answerMatchMeta.label}
-                  </Text>
-                  <Text style={styles.shareResultTagline}>
-                    {"There's still a spark. Let's make it ours."}
-                  </Text>
-                  <Text style={styles.shareResultDomain}>oursparkapp.com</Text>
-                </View>
-              </View>
-
-              <TouchableOpacity
-                activeOpacity={0.9}
-                style={styles.shareOurResultButton}
-                onPress={shareOurResult}
-              >
-                <Text style={styles.shareOurResultButtonText}>Share Our Result</Text>
-              </TouchableOpacity>
-
               {vaultSaveBanner ? (
                 <Text style={styles.vaultSavedBanner}>Saved to your Vault</Text>
               ) : null}
@@ -1143,13 +1247,102 @@ Answer one question together every day. Download OurSpark: https://oursparkapp.c
               <TouchableOpacity activeOpacity={0.9} style={styles.vaultButton} onPress={saveToVault}>
                 <Text style={styles.inviteActionButtonText}>Save to Vault</Text>
               </TouchableOpacity>
-              <TouchableOpacity activeOpacity={0.9} style={styles.shareSparkButton} onPress={shareSparkMoment}>
-                <Text style={styles.inviteActionButtonText}>Share Our Spark</Text>
-              </TouchableOpacity>
             </View>
           ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={showPerfectSyncModal}
+        transparent
+        animationType="none"
+        onRequestClose={dismissPerfectSyncModal}
+      >
+        <Animated.View style={[styles.shareModalRoot, { opacity: perfectSyncOpacity }]}>
+          <View style={styles.shareModalOverlay} />
+          <View style={styles.shareModalCenterColumn}>
+            <ViewShot ref={perfectSyncCardRef} style={styles.perfectSyncCardWrap} options={{ format: 'png' }}>
+              <View style={styles.perfectSyncGradientStack}>
+                <View style={styles.perfectSyncGradientTop} />
+                <View style={styles.perfectSyncGradientBottom} />
+              </View>
+              <View style={styles.perfectSyncCardContent}>
+                <Image source={HOME_LOGO} style={styles.perfectSyncLogo} resizeMode="contain" />
+                <View style={styles.perfectSyncCirclesRow}>
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <View key={i} style={styles.perfectSyncCircleFilled} />
+                  ))}
+                </View>
+                <Text style={styles.perfectSyncTitle}>Perfect Sync</Text>
+                <Text style={styles.perfectSyncSubtitle}>We answered as one</Text>
+                <Text style={styles.perfectSyncDate}>{todayLabel}</Text>
+                <View style={styles.shareCardDivider} />
+                <Text style={styles.shareCardTagline}>
+                  {"There's still a spark. Let's make it ours."}
+                </Text>
+                <Text style={styles.shareCardDomain}>oursparkapp.com</Text>
+              </View>
+            </ViewShot>
+            <TouchableOpacity
+              activeOpacity={0.9}
+              style={styles.shareModalPrimaryButton}
+              onPress={onSavePerfectSyncCard}
+            >
+              <Text style={styles.shareModalPrimaryButtonText}>Save to Camera Roll</Text>
+            </TouchableOpacity>
+            <TouchableOpacity activeOpacity={0.85} onPress={dismissPerfectSyncModal} style={styles.shareModalContinueWrap}>
+              <Text style={styles.shareModalContinueText}>Continue</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </Modal>
+
+      <Modal
+        visible={showMilestoneModal}
+        transparent
+        animationType="none"
+        onRequestClose={dismissMilestoneModal}
+      >
+        <Animated.View style={[styles.shareModalRoot, { opacity: milestoneModalOpacity }]}>
+          <View style={styles.shareModalOverlay} />
+          <View style={styles.shareModalCenterColumn}>
+            <ViewShot ref={milestoneCardRef} style={styles.milestoneShareCardWrap} options={{ format: 'png' }}>
+              <Image source={HOME_LOGO} style={styles.milestoneShareLogo} resizeMode="contain" />
+              <View style={styles.milestoneShareRibbonWrap}>
+                <Ionicons name="ribbon-outline" size={70} color="#F4A147" />
+              </View>
+              {milestoneData ? (
+                <>
+                  <Text style={styles.milestoneShareHeading}>
+                    {getMilestoneCardHeading(milestoneData.streak)}
+                  </Text>
+                  <Text style={styles.milestoneShareSubtext}>
+                    You and {milestoneData.partnerName} have kept your spark alive for {milestoneData.streak} days
+                    straight.
+                  </Text>
+                  <Text style={styles.milestoneShareBigNumber}>{milestoneData.streak}</Text>
+                  <Text style={styles.milestoneShareDaysLabel}>days in sync</Text>
+                </>
+              ) : null}
+              <View style={styles.shareCardDivider} />
+              <Text style={styles.shareCardTagline}>
+                {"There's still a spark. Let's make it ours."}
+              </Text>
+              <Text style={styles.shareCardDomain}>oursparkapp.com</Text>
+            </ViewShot>
+            <TouchableOpacity
+              activeOpacity={0.9}
+              style={styles.shareModalPrimaryButton}
+              onPress={onSaveMilestoneCard}
+            >
+              <Text style={styles.shareModalPrimaryButtonText}>Save to Camera Roll</Text>
+            </TouchableOpacity>
+            <TouchableOpacity activeOpacity={0.85} onPress={dismissMilestoneModal} style={styles.shareModalContinueWrap}>
+              <Text style={styles.shareModalContinueText}>Continue</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -2785,95 +2978,175 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 23,
   },
-  shareResultCardWrap: {
-    width: Dimensions.get('window').width - 32,
-    alignSelf: 'center',
+  shareModalRoot: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 8,
-    marginHorizontal: -8,
+    paddingHorizontal: 24,
   },
-  shareResultCard: {
-    width: '100%',
-    backgroundColor: BG,
-    borderWidth: 1,
-    borderColor: PURPLE,
-    borderRadius: 20,
-    padding: 24,
+  shareModalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(9, 2, 54, 0.92)',
+  },
+  shareModalCenterColumn: {
+    width: 320,
+    alignItems: 'stretch',
+    zIndex: 1,
+  },
+  perfectSyncCardWrap: {
+    width: 320,
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: '#F4A147',
+    overflow: 'hidden',
+    position: 'relative',
+    minHeight: 360,
+  },
+  perfectSyncGradientStack: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'column',
+  },
+  perfectSyncGradientTop: {
+    flex: 1,
+    backgroundColor: '#090236',
+  },
+  perfectSyncGradientBottom: {
+    flex: 1,
+    backgroundColor: '#0D0845',
+  },
+  perfectSyncCardContent: {
+    padding: 32,
     alignItems: 'center',
   },
-  shareResultLogo: {
+  perfectSyncLogo: {
     width: 80,
     height: 80,
     alignSelf: 'center',
-    marginBottom: 8,
   },
-  shareResultHeadline: {
-    fontFamily: FONT_HEADING,
-    color: CREAM,
-    fontSize: 24,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  shareResultDate: {
-    fontFamily: FONT_BODY,
-    color: PURPLE,
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  shareResultCirclesRow: {
+  perfectSyncCirclesRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
+    marginTop: 16,
   },
-  shareResultCircle: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+  perfectSyncCircleFilled: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     margin: 4,
+    backgroundColor: '#F4A147',
   },
-  shareResultCircleFilled: {
-    backgroundColor: ORANGE,
-  },
-  shareResultCircleOutline: {
-    backgroundColor: 'transparent',
-    borderWidth: 2,
-    borderColor: PURPLE,
-  },
-  shareResultLabel: {
+  perfectSyncTitle: {
     fontFamily: FONT_HEADING,
-    fontSize: 20,
+    color: '#F4A147',
+    fontSize: 32,
     textAlign: 'center',
-    marginBottom: 12,
+    marginTop: 12,
   },
-  shareResultTagline: {
+  perfectSyncSubtitle: {
     fontFamily: FONT_BODY,
-    color: CREAM,
+    color: '#F1E9D2',
+    fontSize: 16,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  perfectSyncDate: {
+    fontFamily: FONT_BODY,
+    color: '#841C67',
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  shareCardDivider: {
+    height: 1,
+    backgroundColor: '#841C67',
+    opacity: 0.4,
+    alignSelf: 'stretch',
+    marginVertical: 16,
+  },
+  shareCardTagline: {
+    fontFamily: FONT_BODY,
+    color: '#F1E9D2',
     fontSize: 12,
     textAlign: 'center',
     opacity: 0.7,
-    marginBottom: 8,
   },
-  shareResultDomain: {
+  shareCardDomain: {
     fontFamily: FONT_BODY,
-    color: PURPLE,
+    color: '#841C67',
     fontSize: 11,
     textAlign: 'center',
+    marginTop: 4,
   },
-  shareOurResultButton: {
+  shareModalPrimaryButton: {
     width: '100%',
     borderRadius: 14,
     backgroundColor: '#F48F4F',
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 12,
+    marginTop: 16,
   },
-  shareOurResultButtonText: {
+  shareModalPrimaryButtonText: {
     fontFamily: FONT_BODY,
     color: CREAM,
     fontSize: 16,
+  },
+  shareModalContinueWrap: {
+    marginTop: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  shareModalContinueText: {
+    fontFamily: FONT_BODY,
+    color: '#F1E9D2',
+    fontSize: 15,
+    textAlign: 'center',
+  },
+  milestoneShareCardWrap: {
+    width: 320,
+    backgroundColor: '#0D0845',
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: '#F4A147',
+    padding: 32,
+    alignItems: 'center',
+  },
+  milestoneShareLogo: {
+    width: 70,
+    height: 70,
+    alignSelf: 'center',
+  },
+  milestoneShareRibbonWrap: {
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  milestoneShareHeading: {
+    fontFamily: FONT_HEADING,
+    color: '#F4A147',
+    fontSize: 28,
+    textAlign: 'center',
+    marginTop: 12,
+  },
+  milestoneShareSubtext: {
+    fontFamily: FONT_BODY,
+    color: '#F1E9D2',
+    fontSize: 15,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  milestoneShareBigNumber: {
+    fontFamily: FONT_HEADING,
+    color: '#F4A147',
+    fontSize: 64,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  milestoneShareDaysLabel: {
+    fontFamily: FONT_BODY,
+    color: '#F1E9D2',
+    fontSize: 14,
+    textAlign: 'center',
   },
   vaultSavedBanner: {
     fontFamily: FONT_BODY,
@@ -2890,14 +3163,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 8,
-  },
-  shareSparkButton: {
-    width: '100%',
-    borderRadius: 14,
-    backgroundColor: '#F48F4F',
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   vaultScroll: {
     paddingBottom: 32,
