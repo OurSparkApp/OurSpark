@@ -5,7 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -13,6 +13,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -33,6 +34,7 @@ const FONT_BODY = 'Montserrat_400Regular';
 const HOME_LOGO = require('./assets/OurSpark_Logo_White_font_for_dark_background.png');
 
 const Tab = createBottomTabNavigator();
+type AppStage = 'auth' | 'invite' | 'main';
 
 function formatTodayLong(date: Date): string {
   return date.toLocaleDateString(undefined, {
@@ -51,7 +53,7 @@ function HomeButton({ label, onPress }: { label: string; onPress?: () => void })
   );
 }
 
-function HomeScreen() {
+function HomeScreen({ onBeginOurStory }: { onBeginOurStory?: () => void }) {
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
       <View style={styles.homeInner}>
@@ -60,7 +62,7 @@ function HomeScreen() {
           <Text style={styles.tagline}>{"There's still a spark. Let's make it ours."}</Text>
         </View>
         <View style={styles.homeBottomSection}>
-          <HomeButton label="Begin Our Story" />
+          <HomeButton label="Begin Our Story" onPress={onBeginOurStory} />
           <Text style={styles.caption}>Join 1,000+ couples already connecting</Text>
         </View>
       </View>
@@ -120,6 +122,229 @@ function LoadingScreen() {
 
 type AuthMode = 'login' | 'signup';
 
+function generateInviteCode(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < 6; i += 1) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
+async function attachUserToCouple(userId: string, coupleId: string): Promise<{ error: unknown | null }> {
+  const updateResult = await supabase
+    .from('profiles')
+    .update({ couple_id: coupleId })
+    .eq('id', userId)
+    .select('id')
+    .maybeSingle();
+
+  if (updateResult.error) {
+    return { error: updateResult.error };
+  }
+
+  if (!updateResult.data) {
+    const upsertResult = await supabase
+      .from('profiles')
+      .upsert({ id: userId, couple_id: coupleId }, { onConflict: 'id' });
+
+    return { error: upsertResult.error };
+  }
+
+  return { error: null };
+}
+
+function InviteCodeScreen({ userId, onComplete }: { userId: string; onComplete: () => void }) {
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [joinCode, setJoinCode] = useState('');
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [isWorking, setIsWorking] = useState(false);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const checkExistingCouple = async () => {
+      setIsLoadingProfile(true);
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('couple_id')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (!isActive) {
+        return;
+      }
+
+      if (!error && data?.couple_id) {
+        onComplete();
+        return;
+      }
+
+      setIsLoadingProfile(false);
+    };
+
+    checkExistingCouple();
+
+    return () => {
+      isActive = false;
+    };
+  }, [onComplete, userId]);
+
+  const createCouple = async () => {
+    setErrorMessage('');
+    setIsWorking(true);
+    const createdCode = generateInviteCode();
+
+    const { data, error } = await supabase
+      .from('couples')
+      .insert({ invite_code: createdCode })
+      .select('id')
+      .single();
+
+    if (error || !data?.id) {
+      setErrorMessage('Something went wrong while creating your spark. Please try again.');
+      setIsWorking(false);
+      return;
+    }
+
+    const attachResult = await attachUserToCouple(userId, data.id);
+    if (attachResult.error) {
+      setErrorMessage('Something went wrong while linking your profile. Please try again.');
+      setIsWorking(false);
+      return;
+    }
+
+    setInviteCode(createdCode);
+    setIsWorking(false);
+  };
+
+  const joinCouple = async () => {
+    setErrorMessage('');
+    setIsWorking(true);
+    const normalizedCode = joinCode.trim().toUpperCase();
+
+    const { data: couple, error: coupleError } = await supabase
+      .from('couples')
+      .select('id')
+      .eq('invite_code', normalizedCode)
+      .maybeSingle();
+
+    if (coupleError || !couple?.id) {
+      setErrorMessage("Code not found. Check with your partner and try again.");
+      setIsWorking(false);
+      return;
+    }
+
+    const attachResult = await attachUserToCouple(userId, couple.id);
+    if (attachResult.error) {
+      setErrorMessage('Something went wrong while linking your profile. Please try again.');
+      setIsWorking(false);
+      return;
+    }
+
+    setIsWorking(false);
+    onComplete();
+  };
+
+  const shareInviteCode = async () => {
+    if (!inviteCode) {
+      return;
+    }
+
+    await Share.share({
+      message: `💕 I'm using OurSpark to connect with you every day. Download the app and use my code ${inviteCode} to join me! 
+
+Download here: https://ourspark.app (coming soon)
+
+One question a day. Answered together. 🔥`,
+    });
+  };
+
+  if (isLoadingProfile) {
+    return (
+      <SafeAreaView style={styles.screen} edges={['top']}>
+        <View style={styles.loadingRoot}>
+          <ActivityIndicator size="large" color={ORANGE} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.screen} edges={['top']}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+      >
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.inviteScroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.inviteHeading}>Connect With Your Partner</Text>
+          <Text style={styles.inviteSubheading}>Create a new spark or join your partner&apos;s</Text>
+
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={styles.inviteActionButton}
+            onPress={createCouple}
+            disabled={isWorking}
+          >
+            <Text style={styles.inviteActionButtonText}>Create Our Spark</Text>
+          </TouchableOpacity>
+
+          {inviteCode ? (
+            <View style={styles.generatedCodeWrap}>
+              <TouchableOpacity activeOpacity={0.85} style={styles.generatedCodeButton} onPress={shareInviteCode}>
+                <Text style={styles.generatedCodeText}>{inviteCode}</Text>
+              </TouchableOpacity>
+              <Text style={styles.generatedCodeTapHint}>Tap to share</Text>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.inviteActionButton}
+                onPress={onComplete}
+                disabled={isWorking}
+              >
+                <Text style={styles.inviteActionButtonText}>Continue</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          <View style={styles.orRow}>
+            <View style={styles.orLine} />
+            <Text style={styles.orText}>OR</Text>
+            <View style={styles.orLine} />
+          </View>
+
+          <TextInput
+            style={styles.authInput}
+            placeholder="Enter your partner's code"
+            placeholderTextColor={`${CREAM}99`}
+            value={joinCode}
+            onChangeText={(text) => setJoinCode(text.toUpperCase())}
+            autoCapitalize="characters"
+            autoCorrect={false}
+          />
+
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={styles.inviteActionButton}
+            onPress={joinCouple}
+            disabled={isWorking}
+          >
+            <Text style={styles.inviteActionButtonText}>Join Our Spark</Text>
+          </TouchableOpacity>
+
+          {errorMessage ? <Text style={styles.inviteError}>{errorMessage}</Text> : null}
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
 function AuthScreen({
   mode,
   onSubmit,
@@ -131,7 +356,7 @@ function AuthScreen({
     firstName: string;
     email: string;
     password: string;
-  }) => void | Promise<void>;
+  }) => Promise<string | null>;
   onSwitchMode: () => void;
 }) {
   const isLogin = mode === 'login';
@@ -139,6 +364,14 @@ function AuthScreen({
   const [email, setEmail] = useState('');
   const [password, setPassword] = React.useState('');
   const [showPassword, setShowPassword] = React.useState(false);
+  const [authError, setAuthError] = useState('');
+  const handleSubmit = async () => {
+    setAuthError('');
+    const errorMessage = await onSubmit({ mode, firstName, email, password });
+    if (errorMessage) {
+      setAuthError(errorMessage);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -153,10 +386,8 @@ function AuthScreen({
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.authHeading}>{isLogin ? 'Welcome Back' : 'Create Account'}</Text>
-          <Text style={styles.authSubheading}>
-            {isLogin ? 'Your partner is waiting' : 'Start your journey together'}
-          </Text>
+          <Image source={HOME_LOGO} style={styles.authLogo} resizeMode="contain" />
+          {isLogin ? <Text style={styles.loginTagline}>The spark starts here.</Text> : null}
 
           {!isLogin && (
             <TextInput
@@ -179,6 +410,7 @@ function AuthScreen({
           />
 
           <View style={styles.authPasswordRow}>
+            {/* PASSWORD FIELD - DO NOT REMOVE: textContentType="oneTimeCode" autoComplete="off" required to disable iOS autofill */}
             <TextInput
               style={styles.authPasswordInput}
               value={password}
@@ -205,12 +437,11 @@ function AuthScreen({
           <TouchableOpacity
             activeOpacity={0.92}
             style={styles.authButtonOuter}
-            onPress={() => onSubmit({ mode, firstName, email, password })}
+            onPress={handleSubmit}
           >
-            <View style={styles.gradientLayerPurple} />
-            <View style={styles.gradientLayerOrange} />
             <Text style={styles.authButtonText}>{isLogin ? 'Sign In' : 'Create My Account'}</Text>
           </TouchableOpacity>
+          {authError ? <Text style={styles.authErrorText}>{authError}</Text> : null}
 
           <TouchableOpacity activeOpacity={0.8} onPress={onSwitchMode}>
             <Text style={styles.authSwitchText}>
@@ -223,7 +454,7 @@ function AuthScreen({
   );
 }
 
-function MainTabs() {
+function MainTabs({ onBeginOurStory }: { onBeginOurStory: () => void }) {
   return (
     <Tab.Navigator
       screenOptions={{
@@ -246,7 +477,6 @@ function MainTabs() {
     >
       <Tab.Screen
         name="Home"
-        component={HomeScreen}
         options={{
           tabBarIcon: ({ color }) => (
             <Text style={[styles.tabIcon, { color }]} allowFontScaling={false}>
@@ -254,7 +484,9 @@ function MainTabs() {
             </Text>
           ),
         }}
-      />
+      >
+        {() => <HomeScreen onBeginOurStory={onBeginOurStory} />}
+      </Tab.Screen>
       <Tab.Screen
         name="Question"
         component={DailyQuestionScreen}
@@ -271,13 +503,28 @@ function MainTabs() {
   );
 }
 
+async function getProfileCoupleId(userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('couple_id')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) {
+    return null;
+  }
+
+  return data?.couple_id ?? null;
+}
+
 export default function App() {
   const [fontsLoaded, fontError] = useFonts({
     RedHatDisplay_700Bold,
     Montserrat_400Regular,
   });
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [appStage, setAppStage] = useState<AppStage>('auth');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   if (!fontsLoaded && !fontError) {
     return <LoadingScreen />;
@@ -291,8 +538,17 @@ export default function App() {
     <SafeAreaProvider>
       <NavigationContainer>
         <StatusBar style="light" />
-        {isAuthenticated ? (
-          <MainTabs />
+        {appStage === 'main' ? (
+          <MainTabs
+            onBeginOurStory={async () => {
+              await supabase.auth.signOut();
+              setCurrentUserId(null);
+              setAuthMode('signup');
+              setAppStage('auth');
+            }}
+          />
+        ) : appStage === 'invite' && currentUserId ? (
+          <InviteCodeScreen userId={currentUserId} onComplete={() => setAppStage('main')} />
         ) : (
           <AuthScreen
             mode={authMode}
@@ -309,9 +565,23 @@ export default function App() {
                 });
                 console.log('Supabase signUp data:', JSON.stringify(data));
                 console.log('Supabase signUp error:', JSON.stringify(error));
+
+                if (!error && data?.user?.id) {
+                  setCurrentUserId(data.user.id);
+                  setAppStage('invite');
+                  return null;
+                }
+                return error?.message ?? 'Unable to create account. Please try again.';
               }
 
-              setIsAuthenticated(true);
+              const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+              if (error || !data.user?.id) {
+                return error?.message ?? 'Unable to sign in. Please check your credentials.';
+              }
+
+              setCurrentUserId(data.user.id);
+              setAppStage('main');
+              return null;
             }}
             onSwitchMode={() => setAuthMode((prev) => (prev === 'login' ? 'signup' : 'login'))}
           />
@@ -342,19 +612,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingVertical: 24,
   },
-  authHeading: {
-    fontFamily: FONT_HEADING,
-    fontSize: 40,
-    color: CREAM,
-    textAlign: 'center',
-    letterSpacing: 0.4,
+  authLogo: {
+    width: 200,
+    height: 200,
+    alignSelf: 'center',
+    marginBottom: 10,
   },
-  authSubheading: {
+  loginTagline: {
     fontFamily: FONT_BODY,
-    fontSize: 16,
+    fontSize: 18,
     color: CREAM,
     textAlign: 'center',
-    marginTop: 10,
     marginBottom: 26,
   },
   authInput: {
@@ -402,11 +670,11 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 56,
     borderRadius: 28,
-    overflow: 'hidden',
+    backgroundColor: '#F48F4F',
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 10,
-    shadowColor: ORANGE,
+    shadowColor: '#F48F4F',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
     shadowRadius: 16,
@@ -425,6 +693,99 @@ const styles = StyleSheet.create({
     marginTop: 16,
     textAlign: 'center',
     opacity: 0.95,
+  },
+  authErrorText: {
+    fontFamily: FONT_BODY,
+    color: '#FF7575',
+    fontSize: 13,
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  inviteScroll: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 24,
+  },
+  inviteHeading: {
+    fontFamily: FONT_HEADING,
+    fontSize: 34,
+    color: CREAM,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  inviteSubheading: {
+    fontFamily: FONT_BODY,
+    fontSize: 15,
+    color: CREAM,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  inviteActionButton: {
+    width: '100%',
+    borderRadius: 14,
+    backgroundColor: PURPLE,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  inviteActionButtonText: {
+    fontFamily: FONT_BODY,
+    fontSize: 16,
+    color: CREAM,
+  },
+  generatedCodeWrap: {
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  generatedCodeButton: {
+    borderWidth: 1,
+    borderColor: PURPLE,
+    borderRadius: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    shadowColor: PURPLE,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  generatedCodeText: {
+    fontFamily: FONT_HEADING,
+    fontSize: 44,
+    color: ORANGE,
+    letterSpacing: 3,
+  },
+  generatedCodeTapHint: {
+    fontFamily: FONT_BODY,
+    fontSize: 12,
+    color: CREAM,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  orRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: `${CREAM}33`,
+  },
+  orText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    marginHorizontal: 10,
+    fontSize: 13,
+  },
+  inviteError: {
+    fontFamily: FONT_BODY,
+    color: '#FF7575',
+    fontSize: 13,
+    marginTop: 2,
+    textAlign: 'center',
   },
   screen: {
     flex: 1,
