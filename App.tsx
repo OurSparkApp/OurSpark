@@ -41,6 +41,7 @@ import {
 } from './lib/notifications';
 // DB migration for Expo push tokens (run in Supabase SQL editor):
 // -- ALTER TABLE profiles ADD COLUMN IF NOT EXISTS push_token text;
+import { awardVaultKeeperIfFirstSave, checkAndAwardBadges } from './lib/badges';
 import { scheduledDateMatchesTodayMonthDay } from './lib/scheduledQuestion';
 import { supabase } from './lib/supabase';
 
@@ -48,6 +49,7 @@ type MainTabParamList = {
   Dashboard: undefined;
   Question: undefined;
   Vault: undefined;
+  Badges: undefined;
 };
 
 const navigationRef = createNavigationContainerRef<MainTabParamList>();
@@ -590,10 +592,58 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   const milestoneModalOpacity = useRef(new Animated.Value(0)).current;
   const perfectSyncCardRef = useRef<ViewShot | null>(null);
   const milestoneCardRef = useRef<ViewShot | null>(null);
+  const [badgeToast, setBadgeToast] = useState<string | null>(null);
+  const badgeToastQueueRef = useRef<string[]>([]);
+  const badgeToastTranslateY = useRef(new Animated.Value(120)).current;
+  const badgeToastDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     partnerNameRef.current = partnerName;
   }, [partnerName]);
+
+  const enqueueBadgeToast = useCallback((name: string) => {
+    setBadgeToast((current) => {
+      if (current) {
+        badgeToastQueueRef.current.push(name);
+        return current;
+      }
+      return name;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!badgeToast) {
+      const next = badgeToastQueueRef.current.shift();
+      if (next) {
+        setBadgeToast(next);
+      }
+      return;
+    }
+    if (badgeToastDismissTimerRef.current) {
+      clearTimeout(badgeToastDismissTimerRef.current);
+    }
+    badgeToastTranslateY.setValue(120);
+    Animated.timing(badgeToastTranslateY, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+    badgeToastDismissTimerRef.current = setTimeout(() => {
+      Animated.timing(badgeToastTranslateY, {
+        toValue: 120,
+        duration: 250,
+        useNativeDriver: true,
+      }).start(() => {
+        setBadgeToast(null);
+      });
+    }, 3000);
+    return () => {
+      if (badgeToastDismissTimerRef.current) {
+        clearTimeout(badgeToastDismissTimerRef.current);
+        badgeToastDismissTimerRef.current = null;
+      }
+    };
+  }, [badgeToast]);
 
   const answerMatchMeta = useMemo(
     () => getAnswerMatchMeta(myAnswer, partnerAnswer),
@@ -674,6 +724,19 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
 
     if (updateError) {
       return;
+    }
+
+    if (questionId) {
+      void checkAndAwardBadges({
+        coupleId,
+        userId,
+        questionId,
+        myText,
+        theirText,
+        isPerfectSync: getAnswerMatchMeta(myText, theirText).tier === 'perfect',
+        streakAfterUpdate: nextStreak,
+        onBadgeAwarded: enqueueBadgeToast,
+      });
     }
 
     if (isWeeklyStreakMilestone(nextStreak)) {
@@ -1154,6 +1217,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       saved_at: new Date().toISOString(),
     });
     if (!error) {
+      void awardVaultKeeperIfFirstSave(coupleId, enqueueBadgeToast);
       if (vaultSaveBannerTimeoutRef.current) {
         clearTimeout(vaultSaveBannerTimeoutRef.current);
       }
@@ -1343,6 +1407,18 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
           </View>
         </Animated.View>
       </Modal>
+
+      {badgeToast ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.badgeToastOuter, { transform: [{ translateY: badgeToastTranslateY }] }]}
+        >
+          <View style={styles.badgeToastInner}>
+            <Ionicons name="ribbon-outline" size={20} color={ORANGE} />
+            <Text style={styles.badgeToastText}>Badge Unlocked: {badgeToast}</Text>
+          </View>
+        </Animated.View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -1706,6 +1782,192 @@ type VaultMomentDisplay = {
   savedAtLabel: string;
 };
 
+type BadgeDisplayRow = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  icon: string;
+  earned: boolean;
+  earnedAt: string | null;
+};
+
+function formatBadgeEarnedDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+      return '';
+    }
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch {
+    return '';
+  }
+}
+
+function BadgesScreen({ userId }: { userId: string }) {
+  const [allBadges, setAllBadges] = useState<Record<string, unknown>[]>([]);
+  const [coupleBadges, setCoupleBadges] = useState<Record<string, unknown>[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchBadges() {
+      setLoading(true);
+      console.log('Fetching badges...');
+
+      const {
+        data: { user },
+        error: authError,
+      } = await supabase.auth.getUser();
+      console.log('Current user:', JSON.stringify(user));
+      console.log('Auth error:', JSON.stringify(authError));
+
+      const effectiveUserId = user?.id ?? userId;
+      if (!effectiveUserId) {
+        console.log('No user id; skipping badge fetches');
+        setAllBadges([]);
+        setCoupleBadges([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('couple_id')
+        .eq('id', effectiveUserId)
+        .single();
+
+      console.log('Profile:', JSON.stringify(profile));
+      console.log('Profile error:', JSON.stringify(profileError));
+
+      const { data: allBadgesData, error: badgesError } = await supabase.from('badges').select('*');
+      console.log('All badges:', JSON.stringify(allBadgesData));
+      console.log('Badges error:', JSON.stringify(badgesError));
+
+      if (badgesError) {
+        setAllBadges([]);
+      } else {
+        setAllBadges((allBadgesData ?? []) as Record<string, unknown>[]);
+      }
+
+      if (profile?.couple_id != null) {
+        const { data: coupleBadgesData, error: coupleBadgesError } = await supabase
+          .from('couple_badges')
+          .select('*')
+          .eq('couple_id', profile.couple_id);
+        console.log('Couple badges:', JSON.stringify(coupleBadgesData));
+        console.log('Couple badges error:', JSON.stringify(coupleBadgesError));
+        setCoupleBadges((coupleBadgesData ?? []) as Record<string, unknown>[]);
+      } else {
+        console.log('Couple badges:', JSON.stringify([]));
+        console.log('Couple badges error:', JSON.stringify(null));
+        setCoupleBadges([]);
+      }
+
+      setLoading(false);
+    }
+
+    void fetchBadges();
+  }, []);
+
+  const rows = useMemo((): BadgeDisplayRow[] => {
+    const earnedBadgeIds = new Set(
+      coupleBadges.map((cb) => (cb.badge_id != null ? String(cb.badge_id) : '')).filter(Boolean)
+    );
+    const earnedAtByBadgeId = new Map<string, string>();
+    for (const e of coupleBadges) {
+      const bid = e.badge_id != null ? String(e.badge_id) : '';
+      const at = typeof e.earned_at === 'string' ? e.earned_at : '';
+      if (bid && at) {
+        earnedAtByBadgeId.set(bid, at);
+      }
+    }
+
+    const merged: BadgeDisplayRow[] = allBadges.map((b) => {
+      const id = b.id != null ? String(b.id) : '';
+      const earned = id !== '' && earnedBadgeIds.has(id);
+      return {
+        id,
+        slug: typeof b.slug === 'string' ? b.slug : '',
+        name: typeof b.name === 'string' ? b.name : 'Badge',
+        description: typeof b.description === 'string' ? b.description : '',
+        icon: typeof b.icon === 'string' ? b.icon : 'ribbon-outline',
+        earned,
+        earnedAt: earned ? earnedAtByBadgeId.get(id) ?? null : null,
+      };
+    });
+
+    merged.sort((a, b) => {
+      if (a.earned && !b.earned) {
+        return -1;
+      }
+      if (!a.earned && b.earned) {
+        return 1;
+      }
+      if (a.earned && b.earned && a.earnedAt && b.earnedAt) {
+        return new Date(b.earnedAt).getTime() - new Date(a.earnedAt).getTime();
+      }
+      return a.slug.localeCompare(b.slug);
+    });
+
+    return merged;
+  }, [allBadges, coupleBadges]);
+
+  const earnedCount = useMemo(() => rows.filter((r) => r.earned).length, [rows]);
+  const totalCount = allBadges.length;
+
+  return (
+    <SafeAreaView style={styles.screen} edges={['top']}>
+      <View style={styles.badgesHeader}>
+        <Text style={styles.badgesHeaderTitle}>Your Badges</Text>
+        <Text style={styles.badgesHeaderSub}>Milestones you&apos;ve earned together</Text>
+      </View>
+
+      <View style={styles.badgesStatsBar}>
+        <Text style={styles.badgesStatsText}>
+          {earnedCount} of {totalCount} badges earned
+        </Text>
+      </View>
+
+      {loading ? (
+        <View style={styles.badgesLoadingWrap}>
+          <ActivityIndicator size="small" color={PURPLE} />
+        </View>
+      ) : (
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.badgesScrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.badgesGrid}>
+            {rows.map((item) => {
+              const earned = item.earned;
+              return (
+                <View key={item.id} style={styles.badgeCell}>
+                  <View style={[styles.badgeCard, earned ? styles.badgeCardEarned : styles.badgeCardLocked]}>
+                    <Ionicons
+                      name={item.icon as keyof typeof Ionicons.glyphMap}
+                      size={36}
+                      color={earned ? ORANGE : PURPLE}
+                      style={!earned ? styles.badgeIconLocked : undefined}
+                    />
+                    <Text style={earned ? styles.badgeNameEarned : styles.badgeNameLocked}>{item.name}</Text>
+                    <Text style={[styles.badgeDesc, !earned && styles.badgeDescLocked]}>{item.description}</Text>
+                    {!earned ? (
+                      <Text style={styles.badgeLockedLabel}>Locked</Text>
+                    ) : item.earnedAt ? (
+                      <Text style={styles.badgeDate}>{formatBadgeEarnedDate(item.earnedAt)}</Text>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        </ScrollView>
+      )}
+    </SafeAreaView>
+  );
+}
+
 function VaultScreen({ userId }: { userId: string }) {
   const navigation = useNavigation<BottomTabNavigationProp<any>>();
   const [loading, setLoading] = useState(true);
@@ -1972,6 +2234,15 @@ function MainTabs({ userId }: { userId: string }) {
         }}
       >
         {() => <VaultScreen userId={userId} />}
+      </Tab.Screen>
+      <Tab.Screen
+        name="Badges"
+        options={{
+          tabBarLabel: 'Badges',
+          tabBarIcon: ({ color }) => <Ionicons name="ribbon-outline" size={24} color={color} />,
+        }}
+      >
+        {() => <BadgesScreen userId={userId} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
@@ -3163,6 +3434,132 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 8,
+  },
+  badgesHeader: {
+    backgroundColor: BG,
+  },
+  badgesHeaderTitle: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 28,
+    textAlign: 'left',
+    paddingTop: 60,
+    paddingHorizontal: 24,
+  },
+  badgesHeaderSub: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    fontSize: 15,
+    textAlign: 'left',
+    paddingHorizontal: 24,
+    paddingBottom: 16,
+  },
+  badgesStatsBar: {
+    backgroundColor: CARD_BG,
+    margin: 16,
+    padding: 12,
+    borderRadius: 12,
+  },
+  badgesStatsText: {
+    fontFamily: FONT_BODY,
+    color: ORANGE,
+    textAlign: 'center',
+    fontSize: 14,
+  },
+  badgesLoadingWrap: {
+    padding: 24,
+    alignItems: 'center',
+  },
+  badgesScrollContent: {
+    paddingBottom: 32,
+  },
+  badgesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 8,
+  },
+  badgeCell: {
+    width: '50%',
+    padding: 8,
+  },
+  badgeCard: {
+    backgroundColor: CARD_BG,
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
+  },
+  badgeCardEarned: {
+    borderWidth: 2,
+    borderColor: ORANGE,
+  },
+  badgeCardLocked: {
+    borderWidth: 1,
+    borderColor: CARD_BG,
+  },
+  badgeIconLocked: {
+    opacity: 0.4,
+  },
+  badgeNameEarned: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  badgeNameLocked: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 8,
+    opacity: 0.4,
+  },
+  badgeDesc: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  badgeDescLocked: {
+    opacity: 0.4,
+  },
+  badgeDate: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  badgeLockedLabel: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    fontSize: 10,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  badgeToastOuter: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 32,
+    zIndex: 100,
+  },
+  badgeToastInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: CARD_BG,
+    borderWidth: 1,
+    borderColor: ORANGE,
+    borderRadius: 12,
+    padding: 12,
+  },
+  badgeToastText: {
+    marginLeft: 12,
+    flex: 1,
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 14,
   },
   vaultScroll: {
     paddingBottom: 32,
