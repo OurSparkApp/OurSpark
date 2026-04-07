@@ -541,9 +541,7 @@ type DailyState = 'answer' | 'waiting' | 'reveal';
 function DailyQuestionScreen({ userId }: { userId: string }) {
   const [answer, setAnswer] = useState('');
   const todayLabel = useMemo(() => formatTodayLong(new Date()), []);
-  const [dailyQuestion, setDailyQuestion] = useState(
-    "What's one small thing your partner does that makes you feel loved?"
-  );
+  const [dailyQuestion, setDailyQuestion] = useState('');
   const [questionId, setQuestionId] = useState<string | null>(null);
   const [coupleId, setCoupleId] = useState<string | null>(null);
   const [dailyState, setDailyState] = useState<DailyState>('answer');
@@ -553,6 +551,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   const [vaultSaveBanner, setVaultSaveBanner] = useState(false);
   const vaultSaveBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dailyLoadReady, setDailyLoadReady] = useState(false);
+  const [partnerName, setPartnerName] = useState<string>('Your partner');
 
   const answerMatchMeta = useMemo(
     () => getAnswerMatchMeta(myAnswer, partnerAnswer),
@@ -697,35 +696,54 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       }
 
       const dayOfYear = getDayOfYear(today);
-      const questionIndex = dayOfYear % validQuestions.length;
+      const totalQuestions = validQuestions.length;
+      const questionIndex = Math.abs(dayOfYear % totalQuestions);
       setDailyQuestion(validQuestions[questionIndex].text);
       return validQuestions[questionIndex].row;
     };
 
     const loadQuestion = async () => {
       setDailyLoadReady(false);
-      const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
-        .select('couple_id')
-        .eq('id', userId)
-        .maybeSingle();
+      setCoupleId(null);
+      setQuestionId(null);
+      setDailyQuestion('');
 
-      if (profileError || !profileData?.couple_id) {
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('couple_id, name')
+        .eq('id', userId)
+        .single();
+
+      if (profileError || !profile) {
+        console.log('Profile loaded:', JSON.stringify(profile ?? null));
+        setDailyLoadReady(true);
+        return;
+      }
+
+      console.log('Profile loaded:', JSON.stringify(profile));
+
+      const cid = profile.couple_id != null ? String(profile.couple_id) : null;
+      setCoupleId(cid);
+
+      if (!cid) {
+        setQuestionId(null);
         setDailyLoadReady(true);
         return;
       }
 
       const selectedQuestion = await selectTodaysQuestion();
+      console.log('Question loaded:', JSON.stringify(selectedQuestion));
+
       const selectedQuestionId = selectedQuestion?.id;
       if (!selectedQuestionId) {
+        setQuestionId(null);
         setDailyLoadReady(true);
         return;
       }
 
       const normalizedQuestionId = String(selectedQuestionId);
-      const normalizedCoupleId = String(profileData.couple_id);
+      const normalizedCoupleId = cid;
       setQuestionId(normalizedQuestionId);
-      setCoupleId(normalizedCoupleId);
 
       const { startIso, endIso } = getLocalDayBounds();
 
@@ -799,6 +817,60 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
 
     loadQuestion();
   }, [userId]);
+
+  useEffect(() => {
+    if (!coupleId || !userId) {
+      setPartnerName('Your partner');
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      const { data: partnerProfile, error } = await supabase
+        .from('profiles')
+        .select('name')
+        .eq('couple_id', coupleId)
+        .neq('id', userId)
+        .single();
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        const fallback = 'Your partner';
+        console.log('Partner name:', fallback);
+        setPartnerName(fallback);
+        return;
+      }
+
+      const nextPartnerName = partnerProfile?.name || 'Your partner';
+      const resolved =
+        typeof nextPartnerName === 'string' && nextPartnerName.trim().length > 0
+          ? nextPartnerName.trim()
+          : 'Your partner';
+
+      console.log('Partner name:', resolved);
+      setPartnerName(resolved);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [coupleId, userId]);
+
+  const waitingMessage = useMemo(
+    () => `Waiting for ${partnerName}'s answer...`,
+    [partnerName]
+  );
+
+  const needsAccountSetup = useMemo(
+    () => !dailyLoadReady || !coupleId || !questionId,
+    [dailyLoadReady, coupleId, questionId]
+  );
+
+  const canSubmitAnswer = Boolean(dailyLoadReady && coupleId && questionId);
 
   useEffect(() => {
     if (dailyState !== 'waiting' || !coupleId || !questionId) {
@@ -972,16 +1044,12 @@ Answer one question together every day. Download OurSpark: https://oursparkapp.c
           <Text style={styles.dateAccent}>{todayLabel}</Text>
 
           <View style={styles.questionCard}>
-            <Text style={styles.questionText}>{dailyQuestion}</Text>
+            <Text style={styles.questionText}>
+              {needsAccountSetup ? 'Setting up your account...' : dailyQuestion}
+            </Text>
           </View>
 
-          {!dailyLoadReady ? (
-            <View style={styles.dailyLoadingWrap}>
-              <ActivityIndicator color={PURPLE} />
-            </View>
-          ) : null}
-
-          {dailyLoadReady && dailyState === 'answer' ? (
+          {dailyLoadReady && canSubmitAnswer && dailyState === 'answer' ? (
             <>
               <TextInput
                 style={styles.answerInput}
@@ -996,20 +1064,20 @@ Answer one question together every day. Download OurSpark: https://oursparkapp.c
                 activeOpacity={0.9}
                 style={styles.inviteActionButton}
                 onPress={submitAnswer}
-                disabled={isSubmitting}
+                disabled={isSubmitting || !canSubmitAnswer}
               >
                 <Text style={styles.inviteActionButtonText}>Lock In My Answer</Text>
               </TouchableOpacity>
             </>
           ) : null}
 
-          {dailyLoadReady && dailyState === 'waiting' ? (
+          {dailyLoadReady && canSubmitAnswer && dailyState === 'waiting' ? (
             <View style={styles.waitingWrap}>
-              <Text style={styles.waitingText}>Waiting for your partner&apos;s answer...</Text>
+              <Text style={styles.waitingText}>{waitingMessage}</Text>
             </View>
           ) : null}
 
-          {dailyLoadReady && dailyState === 'reveal' ? (
+          {dailyLoadReady && canSubmitAnswer && dailyState === 'reveal' ? (
             <View style={styles.revealWrap}>
               <View style={styles.revealHeadingRow}>
                 <Ionicons name="sparkles-outline" size={24} color={ORANGE} />
@@ -1020,7 +1088,9 @@ Answer one question together every day. Download OurSpark: https://oursparkapp.c
                 <Text style={styles.revealBodyText}>{myAnswer}</Text>
               </View>
               <View style={styles.revealCard}>
-                <Text style={styles.revealPartnerLabel}>They said:</Text>
+                <Text style={styles.revealPartnerLabel}>
+                  {partnerName ? `${partnerName} said:` : 'They said:'}
+                </Text>
                 <Text style={styles.revealBodyText}>{partnerAnswer}</Text>
               </View>
 
@@ -2654,12 +2724,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: CREAM,
   },
-  dailyLoadingWrap: {
-    marginTop: 24,
-    paddingVertical: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   waitingWrap: {
     marginTop: 18,
     backgroundColor: CARD_BG,
@@ -2703,14 +2767,14 @@ const styles = StyleSheet.create({
   },
   revealYouLabel: {
     fontFamily: FONT_BODY,
-    color: CREAM,
-    fontSize: 14,
+    color: ORANGE,
+    fontSize: 12,
     marginBottom: 6,
   },
   revealPartnerLabel: {
     fontFamily: FONT_BODY,
     color: PURPLE,
-    fontSize: 14,
+    fontSize: 12,
     marginBottom: 6,
   },
   revealBodyText: {
