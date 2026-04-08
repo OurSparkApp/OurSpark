@@ -23,6 +23,8 @@ import {
   Image,
   KeyboardAvoidingView,
   Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   ScrollView,
   Share,
@@ -31,8 +33,9 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Session } from '@supabase/supabase-js';
 import {
   registerForPushNotifications,
@@ -372,6 +375,674 @@ function MarketingHomeScreen({
 
 type DailyQuestionStatus = 'not_answered' | 'waiting' | 'reveal_ready';
 
+const WRAPPED_CORAL = '#F48F4F';
+const WRAPPED_HUMOUR_DEFAULT =
+  'You two answered within 60 seconds of each other more than once this year. Were you sitting next to each other?';
+const WRAPPED_HUMOUR_WITTY = "If that wasn't on purpose, the universe is playing matchmaker.";
+
+type WrappedCategory = 'feels' | 'memory' | 'rightNow' | 'playful';
+
+type WrappedData = {
+  year: number;
+  compatibilityScore: number;
+  longestStreak: number;
+  bestQuestion: string;
+  bestAnswer1: string;
+  bestAnswer2: string;
+  topCategory: WrappedCategory;
+  relationshipWord: string;
+  humourStat: string;
+};
+
+const WRAPPED_CATEGORY_COPY: Record<
+  WrappedCategory,
+  { title: string; description: string }
+> = {
+  feels: {
+    title: 'Feels People',
+    description:
+      'You go deep. You asked the hard questions and showed up for the answers. That takes courage — and you did it together.',
+  },
+  memory: {
+    title: 'Memory People',
+    description:
+      "You live in the good ones. All year you kept reaching back for the moments that made you. That's not nostalgia — that's knowing what matters.",
+  },
+  rightNow: {
+    title: 'Right Now People',
+    description:
+      "You're present. While everyone else was distracted you kept asking — how are you, really? Your partner felt that.",
+  },
+  playful: {
+    title: 'Playful People',
+    description: 'You still make each other laugh. After everything — you still chose fun. Never stop.',
+  },
+};
+
+function parseScheduledMonthDayForWrapped(raw: unknown): { month: number; day: number } | null {
+  if (raw == null) {
+    return null;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    const ymd = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
+    if (ymd) {
+      return { month: Number.parseInt(ymd[2], 10), day: Number.parseInt(ymd[3], 10) };
+    }
+    const d = new Date(trimmed);
+    if (!Number.isNaN(d.getTime())) {
+      return { month: d.getMonth() + 1, day: d.getDate() };
+    }
+    return null;
+  }
+  if (raw instanceof Date) {
+    return { month: raw.getMonth() + 1, day: raw.getDate() };
+  }
+  return null;
+}
+
+function categoryBucketFromScheduledDate(raw: unknown): WrappedCategory | null {
+  const md = parseScheduledMonthDayForWrapped(raw);
+  if (!md) {
+    return null;
+  }
+  const ref = new Date(2024, md.month - 1, md.day);
+  if (Number.isNaN(ref.getTime())) {
+    return null;
+  }
+  const doy = getDayOfYear(ref);
+  const r = ((doy % 4) + 4) % 4;
+  if (r === 0) {
+    return 'feels';
+  }
+  if (r === 1) {
+    return 'memory';
+  }
+  if (r === 2) {
+    return 'rightNow';
+  }
+  return 'playful';
+}
+
+function syncScoreWrappedCopy(score: number): string {
+  if (score >= 80) {
+    return "Either you're soulmates or one of you is psychic. Either way, we're impressed.";
+  }
+  if (score >= 60) {
+    return 'In sync, with just enough mystery to keep things interesting.';
+  }
+  if (score >= 40) {
+    return "Opposites who keep choosing each other. That's actually the good stuff.";
+  }
+  return "Turns out opposites don't just attract — they stick around.";
+}
+
+function isValentinesDayLocal(): boolean {
+  const d = new Date();
+  return d.getMonth() === 1 && d.getDate() === 14;
+}
+
+async function fetchWrappedData(
+  coupleId: string,
+  activeUserId: string,
+  year: number
+): Promise<WrappedData> {
+  const counts: Record<WrappedCategory, number> = {
+    feels: 0,
+    memory: 0,
+    rightNow: 0,
+    playful: 0,
+  };
+
+  const startIso = `${year}-01-01T00:00:00.000Z`;
+  const endIso = `${year + 1}-01-01T00:00:00.000Z`;
+
+  const { data: coupleRow } = await supabase
+    .from('couples')
+    .select('compatibility_score, longest_streak')
+    .eq('id', coupleId)
+    .maybeSingle();
+
+  const compatibilityScore = Math.min(
+    100,
+    Math.max(0, Math.round(Number(coupleRow?.compatibility_score ?? 0)))
+  );
+  const longestStreak = Math.max(0, Math.round(Number(coupleRow?.longest_streak ?? 0)));
+
+  let bestQuestion = 'Your next Perfect Sync is waiting.';
+  let bestAnswer1 = '—';
+  let bestAnswer2 = '—';
+
+  const { data: vaultRows } = await supabase
+    .from('vault')
+    .select('*')
+    .eq('couple_id', coupleId)
+    .order('saved_at', { ascending: false })
+    .limit(1);
+
+  const vaultRow = vaultRows?.[0] as Record<string, unknown> | undefined;
+  if (vaultRow?.question_id != null) {
+    const qid = String(vaultRow.question_id);
+    const { data: qRow } = await supabase.from('questions').select('*').eq('id', qid).maybeSingle();
+    const qt = qRow ? readQuestionTextFromRow(qRow as Record<string, unknown>) : null;
+    if (qt) {
+      bestQuestion = qt;
+    }
+
+    const { data: ansRows } = await supabase
+      .from('answers')
+      .select('*')
+      .eq('couple_id', coupleId)
+      .eq('question_id', qid);
+
+    const rows = (ansRows ?? []) as Record<string, unknown>[];
+    const mine = rows.find((r) => String(r.user_id ?? '') === activeUserId);
+    const partner = rows.find((r) => String(r.user_id ?? '') !== activeUserId);
+    const t1 = readAnswerTextFromRow(mine ?? {});
+    const t2 = readAnswerTextFromRow(partner ?? {});
+    bestAnswer1 = t1 || '—';
+    bestAnswer2 = t2 || '—';
+  }
+
+  const { data: yearAnswers } = await supabase
+    .from('answers')
+    .select('question_id')
+    .eq('couple_id', coupleId)
+    .gte('created_at', startIso)
+    .lt('created_at', endIso);
+
+  const qIds = [
+    ...new Set(
+      (yearAnswers ?? [])
+        .map((a) => String((a as Record<string, unknown>).question_id ?? ''))
+        .filter(Boolean)
+    ),
+  ];
+
+  if (qIds.length > 0) {
+    const { data: questionRows } = await supabase.from('questions').select('*').in('id', qIds);
+    const qMap = new Map<string, Record<string, unknown>>();
+    (questionRows ?? []).forEach((q) => {
+      const m = q as Record<string, unknown>;
+      if (m.id != null) {
+        qMap.set(String(m.id), m);
+      }
+    });
+
+    for (const a of yearAnswers ?? []) {
+      const qid = String((a as Record<string, unknown>).question_id ?? '');
+      const q = qMap.get(qid);
+      if (!q) {
+        continue;
+      }
+      const bucket = categoryBucketFromScheduledDate(q.scheduled_date);
+      if (bucket) {
+        counts[bucket] += 1;
+      }
+    }
+  }
+
+  const order: WrappedCategory[] = ['feels', 'memory', 'rightNow', 'playful'];
+  let topCategory: WrappedCategory = 'feels';
+  let best = -1;
+  for (const k of order) {
+    if (counts[k] > best) {
+      best = counts[k];
+      topCategory = k;
+    }
+  }
+
+  return {
+    year,
+    compatibilityScore,
+    longestStreak,
+    bestQuestion,
+    bestAnswer1,
+    bestAnswer2,
+    topCategory,
+    relationshipWord: 'Growth',
+    humourStat: WRAPPED_HUMOUR_DEFAULT,
+  };
+}
+
+function emptyWrappedData(year: number): WrappedData {
+  return {
+    year,
+    compatibilityScore: 0,
+    longestStreak: 0,
+    bestQuestion: 'Your next Perfect Sync is waiting.',
+    bestAnswer1: '—',
+    bestAnswer2: '—',
+    topCategory: 'feels',
+    relationshipWord: 'Growth',
+    humourStat: WRAPPED_HUMOUR_DEFAULT,
+  };
+}
+
+function OurSparkWrappedModal({
+  visible,
+  onClose,
+  data,
+  loading,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  data: WrappedData | null;
+  loading: boolean;
+}) {
+  const { width: screenW, height: screenH } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const headerH = insets.top + 56;
+  const cardH = Math.max(400, screenH - headerH);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const shotRefs = useRef<(ViewShot | null)[]>([null, null, null, null, null, null]);
+
+  useEffect(() => {
+    if (visible) {
+      setPageIndex(0);
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({ x: 0, y: 0, animated: false });
+      });
+    }
+  }, [visible]);
+
+  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const x = e.nativeEvent.contentOffset.x;
+    const next = Math.round(x / screenW);
+    if (next !== pageIndex && next >= 0 && next <= 6) {
+      setPageIndex(next);
+    }
+  };
+
+  const saveCard = async (shotIndex: number) => {
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Please allow access to your camera roll in Settings.');
+        return;
+      }
+      const shot = shotRefs.current[shotIndex];
+      if (!shot?.capture) {
+        Alert.alert('Could not capture the card. Please try again.');
+        return;
+      }
+      const uri = await shot.capture();
+      await MediaLibrary.saveToLibraryAsync(uri);
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 2000);
+    } catch {
+      Alert.alert('Could not save the image. Please try again.');
+    }
+  };
+
+  const d = data ?? emptyWrappedData(new Date().getFullYear());
+  const cat = WRAPPED_CATEGORY_COPY[d.topCategory];
+  const footerUrlStyle = { fontFamily: FONT_BODY, fontSize: 11 } as const;
+
+  const saveBtn = (shotIndex: number, lightIcon: boolean) => (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      style={[styles.wrappedSaveBtn, { bottom: insets.bottom + 16 }]}
+      onPress={() => void saveCard(shotIndex)}
+    >
+      <Ionicons name="download-outline" size={20} color={lightIcon ? CREAM : BG} />
+    </TouchableOpacity>
+  );
+
+  const cardShell = (
+    key: string,
+    bg: string,
+    children: React.ReactNode,
+    shotWrap: boolean,
+    shotIndex: number,
+    showSave: boolean,
+    saveIconLight: boolean
+  ) => {
+    const inner = (
+      <View style={[styles.wrappedCardInner, { width: screenW, height: cardH, backgroundColor: bg }]}>
+        {children}
+        {showSave ? saveBtn(shotIndex, saveIconLight) : null}
+      </View>
+    );
+    if (!shotWrap) {
+      return <View key={key}>{inner}</View>;
+    }
+    return (
+      <View key={key} style={{ width: screenW }}>
+        <ViewShot
+          ref={(r) => {
+            shotRefs.current[shotIndex] = r;
+          }}
+          style={{ width: screenW, height: cardH }}
+          options={{ format: 'png' }}
+        >
+          {inner}
+        </ViewShot>
+      </View>
+    );
+  };
+
+  return (
+    <Modal visible={visible} animationType="fade" presentationStyle="fullScreen" onRequestClose={onClose}>
+      <View style={[styles.wrappedModalRoot, { backgroundColor: BG }]}>
+        <View style={[styles.wrappedHeaderBar, { paddingTop: insets.top + 8, minHeight: headerH }]}>
+          <View style={styles.wrappedHeaderSide} />
+          <View style={styles.wrappedDotsRow}>
+            {Array.from({ length: 7 }, (_, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.wrappedDot,
+                  {
+                    backgroundColor: i === pageIndex ? ORANGE : PURPLE,
+                    opacity: i === pageIndex ? 1 : 0.3,
+                  },
+                ]}
+              />
+            ))}
+          </View>
+          <View style={styles.wrappedHeaderSide}>
+            <TouchableOpacity
+              accessibilityLabel="Close Wrapped"
+              onPress={onClose}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Ionicons name="close-outline" size={28} color={CREAM} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {savedFlash ? (
+          <View style={styles.wrappedSavedToast} pointerEvents="none">
+            <Text style={styles.wrappedSavedToastText}>Saved!</Text>
+          </View>
+        ) : null}
+
+        {loading ? (
+          <View style={[styles.wrappedLoading, { height: cardH }]}>
+            <ActivityIndicator size="large" color={ORANGE} />
+          </View>
+        ) : (
+          <ScrollView
+            ref={scrollRef}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onScroll={onScroll}
+            scrollEventThrottle={16}
+            keyboardShouldPersistTaps="handled"
+          >
+            {cardShell(
+              'w0',
+              BG,
+              <View style={styles.wrappedCoverWrap}>
+                <View
+                  pointerEvents="none"
+                  style={[styles.wrappedGlowTL, { backgroundColor: PURPLE, top: -80, right: -100 }]}
+                />
+                <View
+                  pointerEvents="none"
+                  style={[styles.wrappedGlowBR, { backgroundColor: WRAPPED_CORAL, bottom: -100, left: -80 }]}
+                />
+                <Image source={HOME_LOGO} style={styles.wrappedCoverLogo} resizeMode="contain" />
+                <Text style={[styles.wrappedCoverYear, { fontFamily: FONT_BODY, color: CREAM }]}>
+                  Your {d.year}
+                </Text>
+                <Text style={[styles.wrappedCoverTitle, { fontFamily: FONT_HEADING, color: CREAM }]}>
+                  Spark Story
+                </Text>
+                <View style={[styles.wrappedDividerOrange, { backgroundColor: WRAPPED_CORAL }]} />
+                <Text style={[styles.wrappedCoverTag, { fontFamily: FONT_BODY, color: CREAM }]}>
+                  {"There's still a spark. Let's make it ours."}
+                </Text>
+                <Text style={[styles.wrappedSwipeHint, { fontFamily: FONT_BODY, color: ORANGE }]}>
+                  Swipe to begin
+                </Text>
+                <Ionicons name="chevron-forward-outline" size={22} color={ORANGE} style={styles.wrappedChevron} />
+              </View>,
+              false,
+              0,
+              false,
+              true
+            )}
+
+            {cardShell(
+              'w1',
+              BG,
+              <View style={styles.wrappedCardPad}>
+                <Text
+                  style={[
+                    styles.wrappedLabelPurple,
+                    { fontFamily: FONT_BODY, color: PURPLE, paddingTop: 100 },
+                  ]}
+                >
+                  YOUR SYNC SCORE
+                </Text>
+                <View style={styles.wrappedScoreRow}>
+                  <Text style={[styles.wrappedScoreBig, { fontFamily: FONT_HEADING, color: ORANGE }]}>
+                    {d.compatibilityScore}
+                  </Text>
+                  <Text style={[styles.wrappedScorePct, { fontFamily: FONT_HEADING, color: ORANGE }]}>%</Text>
+                </View>
+                <Text style={[styles.wrappedSyncSubtext, { fontFamily: FONT_BODY, color: CREAM }]}>
+                  {syncScoreWrappedCopy(d.compatibilityScore)}
+                </Text>
+                <Text style={[styles.wrappedAbsFooter, footerUrlStyle, { color: PURPLE }]}>
+                  oursparkapp.com
+                </Text>
+              </View>,
+              true,
+              0,
+              true,
+              true
+            )}
+
+            {cardShell(
+              'w2',
+              CREAM,
+              <View style={styles.wrappedCardPad}>
+                <Text
+                  style={[
+                    styles.wrappedLabelPurple,
+                    { fontFamily: FONT_BODY, color: PURPLE, paddingTop: 80 },
+                  ]}
+                >
+                  PERFECT SYNC MOMENT
+                </Text>
+                <Text style={[styles.wrappedMomentIntro, { fontFamily: FONT_BODY, color: BG }]}>
+                  Out of every question this year, this one stopped us in our tracks.
+                </Text>
+                <Text style={[styles.wrappedMomentQuestion, { fontFamily: FONT_HEADING, color: BG }]}>
+                  {d.bestQuestion}
+                </Text>
+                <View style={styles.wrappedAnswersRow}>
+                  <View style={[styles.wrappedAnsCardLeft, { backgroundColor: BG }]}>
+                    <Text style={[styles.wrappedAnsTextLight, { fontFamily: FONT_BODY, color: CREAM }]}>
+                      {d.bestAnswer1}
+                    </Text>
+                  </View>
+                  <View style={[styles.wrappedAnsCardRight, { backgroundColor: PURPLE }]}>
+                    <Text style={[styles.wrappedAnsTextLight, { fontFamily: FONT_BODY, color: '#FFFFFF' }]}>
+                      {d.bestAnswer2}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.wrappedMomentFooter, { fontFamily: FONT_BODY, color: PURPLE }]}>
+                  You didn&apos;t plan that. You just both felt it.
+                </Text>
+                <Text style={[styles.wrappedAbsFooter, footerUrlStyle, { color: PURPLE }]}>
+                  oursparkapp.com
+                </Text>
+              </View>,
+              true,
+              1,
+              true,
+              false
+            )}
+
+            {cardShell(
+              'w3',
+              '#F48F4F',
+              <View style={styles.wrappedCardPad}>
+                <Text
+                  style={[
+                    styles.wrappedLabelPurple,
+                    {
+                      fontFamily: FONT_BODY,
+                      color: 'rgba(255,255,255,0.6)',
+                      paddingTop: 100,
+                    },
+                  ]}
+                >
+                  YOUR STREAK RECORD
+                </Text>
+                <Text style={styles.wrappedFlame}>🔥</Text>
+                <Text style={[styles.wrappedStreakNum, { fontFamily: FONT_HEADING, color: '#FFFFFF' }]}>
+                  {d.longestStreak}
+                </Text>
+                <Text style={[styles.wrappedDaysLbl, { fontFamily: FONT_BODY, color: 'rgba(255,255,255,0.8)' }]}>
+                  days
+                </Text>
+                <Text
+                  style={[
+                    styles.wrappedBodyCenter,
+                    {
+                      fontFamily: FONT_BODY,
+                      color: 'rgba(255,255,255,0.8)',
+                      fontStyle: 'italic',
+                    },
+                  ]}
+                >
+                  Whatever you were doing — do it again.
+                </Text>
+                <View style={styles.wrappedWhiteRule} />
+                <Text
+                  style={[styles.wrappedBodyCenterSmall, { fontFamily: FONT_BODY, color: 'rgba(255,255,255,0.7)' }]}
+                >
+                  Unlock your Spicy Report next year 🌶️
+                </Text>
+                <Text
+                  style={[styles.wrappedAbsFooter, footerUrlStyle, { color: 'rgba(255,255,255,0.4)' }]}
+                >
+                  oursparkapp.com
+                </Text>
+              </View>,
+              true,
+              2,
+              true,
+              true
+            )}
+
+            {cardShell(
+              'w4',
+              BG,
+              <View style={styles.wrappedCardPad}>
+                <Text
+                  style={[
+                    styles.wrappedLabelPurple,
+                    { fontFamily: FONT_BODY, color: PURPLE, paddingTop: 100 },
+                  ]}
+                >
+                  YOU ARE
+                </Text>
+                <Text style={[styles.wrappedCategoryTitle, { fontFamily: FONT_HEADING, color: ORANGE }]}>
+                  {cat.title}
+                </Text>
+                <Text
+                  style={[
+                    styles.wrappedBodyCenter,
+                    {
+                      fontFamily: FONT_BODY,
+                      color: CREAM,
+                      paddingHorizontal: 32,
+                      paddingTop: 8,
+                      lineHeight: 26,
+                    },
+                  ]}
+                >
+                  {cat.description}
+                </Text>
+                <Text style={[styles.wrappedAbsFooter, footerUrlStyle, { color: PURPLE }]}>
+                  oursparkapp.com
+                </Text>
+              </View>,
+              true,
+              3,
+              true,
+              true
+            )}
+
+            {cardShell(
+              'w5',
+              '#FFFFFF',
+              <View style={styles.wrappedCardPad}>
+                <Ionicons name="eye-outline" size={60} color={PURPLE} style={styles.wrappedHumourIcon} />
+                <Text style={[styles.wrappedHumourStat, { fontFamily: FONT_HEADING, color: BG }]}>
+                  {d.humourStat}
+                </Text>
+                <Text style={[styles.wrappedHumourWitty, { fontFamily: FONT_BODY, color: PURPLE }]}>
+                  {WRAPPED_HUMOUR_WITTY}
+                </Text>
+                <Text style={[styles.wrappedAbsFooter, footerUrlStyle, { color: PURPLE }]}>
+                  oursparkapp.com
+                </Text>
+              </View>,
+              true,
+              4,
+              true,
+              false
+            )}
+
+            {cardShell(
+              'w6',
+              '#090236',
+              <View style={styles.wrappedCardPad}>
+                <Text
+                  style={[
+                    styles.wrappedLabelPurple,
+                    {
+                      fontFamily: FONT_BODY,
+                      color: 'rgba(241,233,210,0.4)',
+                      paddingTop: 100,
+                    },
+                  ]}
+                >
+                  Based on everything you shared...
+                </Text>
+                <Text style={[styles.wrappedWordIntro, { fontFamily: FONT_BODY, color: 'rgba(241,233,210,0.6)' }]}>
+                  Every question. Every answer. Every feeling you shared. It all pointed to one word.
+                </Text>
+                <Text
+                  style={[
+                    styles.wrappedWordBig,
+                    { fontFamily: FONT_HEADING, color: ORANGE, letterSpacing: -2 },
+                  ]}
+                >
+                  {d.relationshipWord}
+                </Text>
+                <View style={[styles.wrappedDividerOrange, { backgroundColor: ORANGE, width: 24 }]} />
+                <Text style={[styles.wrappedWordOutro, { fontFamily: FONT_BODY, color: 'rgba(241,233,210,0.6)' }]}>
+                  You kept showing up. That&apos;s the whole love story.
+                </Text>
+                <Image source={HOME_LOGO} style={styles.wrappedEndLogo} resizeMode="contain" />
+                <Text style={[styles.wrappedEndUrl, { fontFamily: FONT_BODY, color: 'rgba(241,233,210,0.4)' }]}>
+                  oursparkapp.com
+                </Text>
+              </View>,
+              true,
+              5,
+              true,
+              true
+            )}
+          </ScrollView>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
 function DashboardScreen({ userId }: { userId: string }) {
   const navigation = useNavigation<BottomTabNavigationProp<any>>();
   const pulseOpacity = useRef(new Animated.Value(0.4)).current;
@@ -384,7 +1055,34 @@ function DashboardScreen({ userId }: { userId: string }) {
   const [todayStatus, setTodayStatus] = useState<DailyQuestionStatus>('not_answered');
   const [coupleId, setCoupleId] = useState<string | null>(null);
   const [reflection, setReflection] = React.useState<string | null>(null);
+  const [showWrapped, setShowWrapped] = useState(false);
+  const [wrappedData, setWrappedData] = useState<WrappedData | null>(null);
+  const [wrappedLoading, setWrappedLoading] = useState(false);
   const didRegisterPushNotifications = useRef(false);
+
+  const openWrapped = useCallback(async () => {
+    setShowWrapped(true);
+    setWrappedLoading(true);
+    const year = new Date().getFullYear();
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const uid = authData.user?.id ?? userId;
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('couple_id')
+        .eq('id', uid)
+        .maybeSingle();
+      const cid = profile?.couple_id != null ? String(profile.couple_id) : null;
+      if (!cid) {
+        setWrappedData(emptyWrappedData(year));
+        return;
+      }
+      const fetched = await fetchWrappedData(cid, uid, year);
+      setWrappedData(fetched);
+    } finally {
+      setWrappedLoading(false);
+    }
+  }, [userId]);
 
   React.useEffect(() => {
     console.log('Dashboard mounted');
@@ -447,15 +1145,13 @@ function DashboardScreen({ userId }: { userId: string }) {
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('first_name, couple_id')
+      .select('couple_id, name')
       .eq('id', uid)
       .maybeSingle();
 
-    const name =
-      typeof profile?.first_name === 'string' && profile.first_name.trim()
-        ? profile.first_name.trim()
-        : 'there';
-    setFirstName(name);
+    const userName =
+      typeof profile?.name === 'string' && profile.name.trim() ? profile.name.trim() : '';
+    setFirstName(userName);
 
     const nextCoupleId = profile?.couple_id ? String(profile.couple_id) : null;
     setCoupleId(nextCoupleId);
@@ -572,7 +1268,7 @@ function DashboardScreen({ userId }: { userId: string }) {
     navigation.navigate('Question');
   };
 
-  const greeting = `${getGreetingPrefix(new Date())}, ${firstName}`;
+  const greeting = `${getGreetingPrefix(new Date())}, ${firstName || 'there'}`;
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -677,7 +1373,31 @@ function DashboardScreen({ userId }: { userId: string }) {
             <Text style={styles.dbVaultSub}>Your first Perfect Sync moment will live here</Text>
           )}
         </TouchableOpacity>
+
+        {isValentinesDayLocal() ? (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={styles.dbWrappedTeaser}
+            onPress={() => void openWrapped()}
+          >
+            <Text style={styles.dbWrappedTeaserTitle}>
+              Your {new Date().getFullYear()} Spark Story is here
+            </Text>
+            <Text style={styles.dbWrappedTeaserSub}>Tap to open Wrapped</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        <TouchableOpacity activeOpacity={0.85} style={styles.dbWrappedPreviewBtn} onPress={() => void openWrapped()}>
+          <Text style={styles.dbWrappedPreviewText}>Preview Wrapped</Text>
+        </TouchableOpacity>
       </ScrollView>
+
+      <OurSparkWrappedModal
+        visible={showWrapped}
+        onClose={() => setShowWrapped(false)}
+        data={wrappedData}
+        loading={wrappedLoading}
+      />
     </SafeAreaView>
   );
 }
@@ -3869,5 +4589,315 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginTop: 14,
     alignSelf: 'stretch',
+  },
+  dbWrappedTeaser: {
+    backgroundColor: CARD_BG,
+    borderRadius: 16,
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: `${ORANGE}44`,
+  },
+  dbWrappedTeaserTitle: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 18,
+    textAlign: 'center',
+  },
+  dbWrappedTeaserSub: {
+    fontFamily: FONT_BODY,
+    color: ORANGE,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  dbWrappedPreviewBtn: {
+    alignSelf: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    marginBottom: 24,
+  },
+  dbWrappedPreviewText: {
+    fontFamily: FONT_BODY,
+    color: '#8A8A8A',
+    fontSize: 13,
+  },
+  wrappedModalRoot: {
+    flex: 1,
+  },
+  wrappedHeaderBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    paddingBottom: 8,
+  },
+  wrappedHeaderSide: {
+    width: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  wrappedDotsRow: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  wrappedDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  wrappedSavedToast: {
+    position: 'absolute',
+    top: '42%',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 30,
+  },
+  wrappedSavedToastText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 16,
+  },
+  wrappedLoading: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  wrappedCardInner: {
+    overflow: 'hidden',
+  },
+  wrappedCoverWrap: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  wrappedGlowTL: {
+    position: 'absolute',
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    opacity: 0.1,
+  },
+  wrappedGlowBR: {
+    position: 'absolute',
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    opacity: 0.1,
+  },
+  wrappedCoverLogo: {
+    width: 100,
+    height: 100,
+    marginTop: 80,
+  },
+  wrappedCoverYear: {
+    fontSize: 18,
+    opacity: 0.7,
+    marginTop: 40,
+    textAlign: 'center',
+  },
+  wrappedCoverTitle: {
+    fontSize: 52,
+    textAlign: 'center',
+  },
+  wrappedDividerOrange: {
+    width: 60,
+    height: 2,
+    marginVertical: 24,
+    alignSelf: 'center',
+  },
+  wrappedCoverTag: {
+    fontSize: 14,
+    opacity: 0.5,
+    textAlign: 'center',
+    paddingHorizontal: 16,
+  },
+  wrappedSwipeHint: {
+    fontSize: 13,
+    marginTop: 40,
+    textAlign: 'center',
+  },
+  wrappedChevron: {
+    marginTop: 4,
+  },
+  wrappedCardPad: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingBottom: 56,
+  },
+  wrappedLabelPurple: {
+    fontSize: 11,
+    letterSpacing: 2,
+    textAlign: 'center',
+  },
+  wrappedScoreRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  wrappedScoreBig: {
+    fontSize: 96,
+    lineHeight: 102,
+  },
+  wrappedScorePct: {
+    fontSize: 48,
+    marginBottom: 10,
+    marginLeft: 2,
+  },
+  wrappedSyncSubtext: {
+    fontSize: 16,
+    lineHeight: 26,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 24,
+  },
+  wrappedBodyCenter: {
+    fontSize: 16,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  wrappedAbsFooter: {
+    position: 'absolute',
+    bottom: 40,
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+  },
+  wrappedSaveBtn: {
+    position: 'absolute',
+    right: 16,
+    zIndex: 6,
+  },
+  wrappedMomentIntro: {
+    fontSize: 14,
+    opacity: 0.7,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    marginTop: 8,
+  },
+  wrappedMomentQuestion: {
+    fontSize: 22,
+    fontStyle: 'italic',
+    lineHeight: 30,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    marginTop: 8,
+  },
+  wrappedAnswersRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    marginTop: 12,
+  },
+  wrappedAnsCardLeft: {
+    flex: 1,
+    borderRadius: 12,
+    padding: 16,
+    margin: 8,
+    minHeight: 80,
+    justifyContent: 'center',
+  },
+  wrappedAnsCardRight: {
+    flex: 1,
+    borderRadius: 12,
+    padding: 16,
+    margin: 8,
+    minHeight: 80,
+    justifyContent: 'center',
+  },
+  wrappedAnsTextLight: {
+    fontSize: 13,
+  },
+  wrappedMomentFooter: {
+    fontSize: 13,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 16,
+    paddingHorizontal: 16,
+  },
+  wrappedFlame: {
+    fontSize: 48,
+    textAlign: 'center',
+    marginTop: 12,
+  },
+  wrappedStreakNum: {
+    fontSize: 80,
+    textAlign: 'center',
+  },
+  wrappedDaysLbl: {
+    fontSize: 24,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  wrappedWhiteRule: {
+    width: 60,
+    height: 1,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.3,
+    alignSelf: 'center',
+    marginVertical: 24,
+  },
+  wrappedBodyCenterSmall: {
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  wrappedCategoryTitle: {
+    fontSize: 48,
+    textAlign: 'center',
+    marginTop: 16,
+    paddingHorizontal: 12,
+  },
+  wrappedHumourIcon: {
+    alignSelf: 'center',
+    paddingTop: 100,
+  },
+  wrappedHumourStat: {
+    fontSize: 20,
+    lineHeight: 28,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+    marginTop: 20,
+  },
+  wrappedHumourWitty: {
+    fontSize: 14,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 16,
+    paddingHorizontal: 24,
+  },
+  wrappedWordIntro: {
+    fontSize: 14,
+    lineHeight: 22,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    marginTop: 8,
+  },
+  wrappedWordBig: {
+    fontSize: 64,
+    textAlign: 'center',
+    marginVertical: 24,
+  },
+  wrappedWordOutro: {
+    fontSize: 14,
+    textAlign: 'center',
+    fontStyle: 'italic',
+    paddingHorizontal: 24,
+  },
+  wrappedEndLogo: {
+    width: 60,
+    height: 60,
+    alignSelf: 'center',
+    marginTop: 16,
+  },
+  wrappedEndUrl: {
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 8,
   },
 });
