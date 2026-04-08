@@ -2,6 +2,7 @@
   "expo": {
     "name": "ourspark",
     "slug": "ourspark",
+    "scheme": "ourspark",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -43,7 +44,8 @@
       ],
       "expo-font",
       "expo-secure-store",
-      "expo-media-library"
+      "expo-media-library",
+      "expo-web-browser"
     ]
   }
 }

@@ -12,6 +12,7 @@ import {
 import * as Notifications from 'expo-notifications';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
+import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as MediaLibrary from 'expo-media-library';
 import ViewShot from 'react-native-view-shot';
@@ -22,6 +23,7 @@ import {
   Dimensions,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -659,7 +661,15 @@ function emptyWrappedData(year: number): WrappedData {
   };
 }
 
-function WrappedTeaserModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+function WrappedTeaserModal({
+  visible,
+  onClose,
+  onUnlock,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onUnlock: () => void;
+}) {
   const insets = useSafeAreaInsets();
   const year = new Date().getFullYear();
 
@@ -686,11 +696,7 @@ function WrappedTeaserModal({ visible, onClose }: { visible: boolean; onClose: (
             <View style={styles.wrappedTeaserBlurCard} />
             <View style={styles.wrappedTeaserBlurCard} />
           </View>
-          <TouchableOpacity
-            activeOpacity={0.9}
-            style={styles.wrappedTeaserCta}
-            onPress={() => showStripeComingSoonAlert()}
-          >
+          <TouchableOpacity activeOpacity={0.9} style={styles.wrappedTeaserCta} onPress={onUnlock}>
             <Text style={styles.wrappedTeaserCtaText}>Unlock Everything - for both of you</Text>
           </TouchableOpacity>
         </View>
@@ -1123,7 +1129,13 @@ function OurSparkWrappedModal({
   );
 }
 
-function DashboardScreen({ userId }: { userId: string }) {
+function DashboardScreen({
+  userId,
+  onOpenSubscriptionPlans,
+}: {
+  userId: string;
+  onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
+}) {
   const navigation = useNavigation<BottomTabNavigationProp<any>>();
   const pulseOpacity = useRef(new Animated.Value(0.4)).current;
 
@@ -1543,6 +1555,11 @@ function DashboardScreen({ userId }: { userId: string }) {
       <WrappedTeaserModal
         visible={showWrappedTeaser}
         onClose={() => setShowWrappedTeaser(false)}
+        onUnlock={() => {
+          if (coupleId) {
+            onOpenSubscriptionPlans(coupleId, userId);
+          }
+        }}
       />
     </SafeAreaView>
   );
@@ -3435,11 +3452,18 @@ function BadgesScreen({ userId }: { userId: string }) {
   );
 }
 
-function VaultScreen({ userId }: { userId: string }) {
+function VaultScreen({
+  userId,
+  onOpenSubscriptionPlans,
+}: {
+  userId: string;
+  onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
+}) {
   const navigation = useNavigation<BottomTabNavigationProp<any>>();
   const [loading, setLoading] = useState(true);
   const [moments, setMoments] = useState<VaultMomentDisplay[]>([]);
   const [firstVaultDateLabel, setFirstVaultDateLabel] = useState('');
+  const [activeCoupleId, setActiveCoupleId] = useState<string | null>(null);
   const [isPro, setIsPro] = useState(true);
   const [hasCouple, setHasCouple] = useState(false);
 
@@ -3456,6 +3480,7 @@ function VaultScreen({ userId }: { userId: string }) {
       setFirstVaultDateLabel('');
       setIsPro(true);
       setHasCouple(false);
+      setActiveCoupleId(null);
       setLoading(false);
       return;
     }
@@ -3463,6 +3488,7 @@ function VaultScreen({ userId }: { userId: string }) {
     setHasCouple(true);
 
     const coupleId = String(profile.couple_id);
+    setActiveCoupleId(coupleId);
     const pro = await checkIsPro(coupleId);
     setIsPro(pro);
 
@@ -3679,7 +3705,11 @@ function VaultScreen({ userId }: { userId: string }) {
             <TouchableOpacity
               activeOpacity={0.9}
               style={styles.proUpgradeBtn}
-              onPress={() => showStripeComingSoonAlert()}
+              onPress={() => {
+                if (activeCoupleId) {
+                  onOpenSubscriptionPlans(activeCoupleId, userId);
+                }
+              }}
             >
               <Text style={styles.proUpgradeBtnText}>Unlock Everything</Text>
             </TouchableOpacity>
@@ -3699,6 +3729,7 @@ type PackRow = {
   description: string;
   durationDays: number;
   priceLabel: string;
+  stripePriceId: string;
   isHoliday: boolean;
 };
 
@@ -3730,6 +3761,7 @@ function parsePackRow(raw: Record<string, unknown>): PackRow | null {
         : 'A daily path to help you reconnect one question at a time.',
     durationDays: Number.isFinite(durationRaw) && durationRaw > 0 ? Math.round(durationRaw) : 14,
     priceLabel: typeof priceRaw === 'number' ? `$${priceRaw}` : String(priceRaw),
+    stripePriceId: typeof raw.stripe_price_id === 'string' ? raw.stripe_price_id : '',
     isHoliday: Boolean(raw.is_holiday),
   };
 }
@@ -3752,7 +3784,18 @@ function parseCouplePackRow(raw: Record<string, unknown>): CouplePackRow | null 
   };
 }
 
-function PacksScreen({ userId }: { userId: string }) {
+function PacksScreen({
+  userId,
+  onPurchase,
+}: {
+  userId: string;
+  onPurchase: (
+    priceId: string,
+    type: 'subscription' | 'pack',
+    coupleId: string,
+    userId: string
+  ) => Promise<void>;
+}) {
   const { width: screenWidth } = useWindowDimensions();
   const packCardWidth = (screenWidth - 48) / 2;
   const [loading, setLoading] = useState(true);
@@ -4084,7 +4127,11 @@ function PacksScreen({ userId }: { userId: string }) {
                 <TouchableOpacity
                   activeOpacity={0.9}
                   style={styles.packDetailPrimaryBtn}
-                  onPress={() => showStripeComingSoonAlert()}
+                  onPress={() => {
+                    if (selectedPack.stripePriceId && coupleId) {
+                      void onPurchase(selectedPack.stripePriceId, 'pack', coupleId, userId);
+                    }
+                  }}
                 >
                   <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Get This Pack</Text>
                 </TouchableOpacity>
@@ -4129,7 +4176,20 @@ function PacksScreen({ userId }: { userId: string }) {
   );
 }
 
-function MainTabs({ userId }: { userId: string }) {
+function MainTabs({
+  userId,
+  onPurchase,
+  onOpenSubscriptionPlans,
+}: {
+  userId: string;
+  onPurchase: (
+    priceId: string,
+    type: 'subscription' | 'pack',
+    coupleId: string,
+    userId: string
+  ) => Promise<void>;
+  onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
+}) {
   return (
     <Tab.Navigator
       screenOptions={{
@@ -4157,7 +4217,7 @@ function MainTabs({ userId }: { userId: string }) {
           tabBarIcon: ({ color }) => <Ionicons name="grid-outline" size={24} color={color} />,
         }}
       >
-        {() => <DashboardScreen userId={userId} />}
+        {() => <DashboardScreen userId={userId} onOpenSubscriptionPlans={onOpenSubscriptionPlans} />}
       </Tab.Screen>
       <Tab.Screen
         name="Question"
@@ -4175,7 +4235,7 @@ function MainTabs({ userId }: { userId: string }) {
           tabBarIcon: ({ color }) => <Ionicons name="cube-outline" size={24} color={color} />,
         }}
       >
-        {() => <PacksScreen userId={userId} />}
+        {() => <PacksScreen userId={userId} onPurchase={onPurchase} />}
       </Tab.Screen>
       <Tab.Screen
         name="Vault"
@@ -4184,7 +4244,7 @@ function MainTabs({ userId }: { userId: string }) {
           tabBarIcon: ({ color }) => <Ionicons name="heart-outline" size={24} color={color} />,
         }}
       >
-        {() => <VaultScreen userId={userId} />}
+        {() => <VaultScreen userId={userId} onOpenSubscriptionPlans={onOpenSubscriptionPlans} />}
       </Tab.Screen>
       <Tab.Screen
         name="Badges"
@@ -4378,10 +4438,108 @@ export default function App() {
   const [appStage, setAppStage] = useState<AppStage>('marketing');
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [purchaseToast, setPurchaseToast] = useState<string | null>(null);
+  const [mainTabsRefreshKey, setMainTabsRefreshKey] = useState(0);
+  const [showPlanPicker, setShowPlanPicker] = useState(false);
+  const [planPickerCoupleId, setPlanPickerCoupleId] = useState<string | null>(null);
+  const [planPickerUserId, setPlanPickerUserId] = useState<string | null>(null);
   const appStageRef = useRef(appStage);
   const pendingNavigateToQuestionRef = useRef(false);
 
   appStageRef.current = appStage;
+
+  useEffect(() => {
+    WebBrowser.maybeCompleteAuthSession();
+  }, []);
+
+  useEffect(() => {
+    if (!purchaseToast) {
+      return;
+    }
+    const id = setTimeout(() => setPurchaseToast(null), 2500);
+    return () => clearTimeout(id);
+  }, [purchaseToast]);
+
+  const handlePurchase = useCallback(
+    async (priceId: string, type: 'subscription' | 'pack', coupleId: string, userId: string) => {
+      try {
+        const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
+        const res = await fetch(
+          'https://exyvqwzuwvefyrrcapxn.supabase.co/functions/v1/create-checkout-session',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${supabaseAnonKey}`,
+            },
+            body: JSON.stringify({
+              priceId,
+              type,
+              coupleId,
+              userId,
+              successUrl: 'ourspark://payment-success',
+              cancelUrl: 'ourspark://payment-cancel',
+            }),
+          }
+        );
+        const payload = (await res.json()) as { url?: string; sessionId?: string; error?: string };
+        if (!res.ok) {
+          throw new Error(typeof payload.error === 'string' ? payload.error : 'Could not start checkout');
+        }
+
+        const checkoutUrl = typeof payload.url === 'string' ? payload.url : '';
+        if (!checkoutUrl) {
+          throw new Error('Missing checkout URL');
+        }
+
+        try {
+          await WebBrowser.openBrowserAsync(checkoutUrl);
+        } catch {
+          await Linking.openURL(checkoutUrl);
+        }
+        setMainTabsRefreshKey((k) => k + 1);
+
+        setTimeout(() => {
+          void (async () => {
+            setMainTabsRefreshKey((k) => k + 1);
+            if (type === 'subscription') {
+              const pro = await checkIsPro(coupleId);
+              if (pro) {
+                setPurchaseToast('Welcome to Pro! Everything is now unlocked for both of you.');
+              }
+            } else {
+              const { data: packRow } = await supabase
+                .from('packs')
+                .select('id')
+                .eq('stripe_price_id', priceId)
+                .maybeSingle();
+              if (packRow?.id) {
+                const { data: cp } = await supabase
+                  .from('couple_packs')
+                  .select('id')
+                  .eq('couple_id', coupleId)
+                  .eq('pack_id', packRow.id)
+                  .maybeSingle();
+                if (cp) {
+                  setPurchaseToast('Pack unlocked! Head to your Packs tab to start.');
+                }
+              }
+            }
+          })();
+        }, 2500);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Payment failed';
+        Alert.alert(message);
+      }
+    },
+    []
+  );
+
+  const openSubscriptionPlans = useCallback((coupleId: string, userId: string) => {
+    setPlanPickerCoupleId(coupleId);
+    setPlanPickerUserId(userId);
+    setShowPlanPicker(true);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -4469,7 +4627,12 @@ export default function App() {
       <NavigationContainer ref={navigationRef}>
         <StatusBar style="light" />
         {appStage === 'main' ? (
-          <MainTabs userId={currentUserId ?? ''} />
+          <MainTabs
+            key={mainTabsRefreshKey}
+            userId={currentUserId ?? ''}
+            onPurchase={handlePurchase}
+            onOpenSubscriptionPlans={openSubscriptionPlans}
+          />
         ) : appStage === 'personalization' && currentUserId ? (
           <PersonalizationScreen
             userId={currentUserId}
@@ -4526,6 +4689,59 @@ export default function App() {
             onSwitchMode={() => setAuthMode((prev) => (prev === 'login' ? 'signup' : 'login'))}
           />
         )}
+        <Modal
+          visible={showPlanPicker}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowPlanPicker(false)}
+        >
+          <View style={styles.planPickerOverlay}>
+            <View style={styles.planPickerCard}>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.planPickerMonthlyBtn}
+                onPress={() => {
+                  if (planPickerCoupleId && planPickerUserId) {
+                    void handlePurchase(
+                      'price_1TJgwDFOEYkDbO35raVqORLj',
+                      'subscription',
+                      planPickerCoupleId,
+                      planPickerUserId
+                    );
+                  }
+                  setShowPlanPicker(false);
+                }}
+              >
+                <Text style={styles.planPickerMonthlyBtnText}>Monthly - $8.99/month</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.planPickerAnnualBtn}
+                onPress={() => {
+                  if (planPickerCoupleId && planPickerUserId) {
+                    void handlePurchase(
+                      'price_1TJgx2FOEYkDbO35CDDxw6ED',
+                      'subscription',
+                      planPickerCoupleId,
+                      planPickerUserId
+                    );
+                  }
+                  setShowPlanPicker(false);
+                }}
+              >
+                <Text style={styles.planPickerAnnualBtnText}>Annual - $59.99/year - Save 44%</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+        {purchaseToast ? (
+          <View style={styles.purchaseToastWrap} pointerEvents="none">
+            <View style={styles.purchaseToastInner}>
+              <Text style={styles.purchaseToastText}>{purchaseToast}</Text>
+            </View>
+          </View>
+        ) : null}
       </NavigationContainer>
     </SafeAreaProvider>
   );
@@ -6762,5 +6978,58 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: 'center',
     marginTop: 8,
+  },
+  planPickerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  planPickerCard: {
+    backgroundColor: BG,
+    borderRadius: 16,
+    padding: 20,
+    gap: 12,
+  },
+  planPickerMonthlyBtn: {
+    backgroundColor: '#F48F4F',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  planPickerMonthlyBtnText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 16,
+  },
+  planPickerAnnualBtn: {
+    backgroundColor: PURPLE,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  planPickerAnnualBtnText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 16,
+  },
+  purchaseToastWrap: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 26,
+  },
+  purchaseToastInner: {
+    backgroundColor: CARD_BG,
+    borderWidth: 1,
+    borderColor: ORANGE,
+    borderRadius: 12,
+    padding: 14,
+  },
+  purchaseToastText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 14,
+    textAlign: 'center',
   },
 });
