@@ -48,6 +48,45 @@ import { awardVaultKeeperIfFirstSave, checkAndAwardBadges } from './lib/badges';
 import { scheduledDateMatchesTodayMonthDay } from './lib/scheduledQuestion';
 import { supabase } from './lib/supabase';
 
+const checkIsPro = async (coupleId: string): Promise<boolean> => {
+  const { data } = await supabase.from('couples').select('is_pro').eq('id', coupleId).maybeSingle();
+  return data?.is_pro === true;
+};
+
+/** Free tier: earnable without Pro (matches product names in UI). */
+const FREE_BADGE_SLUGS = new Set(['first_spark', 'streak_7', 'streak_14', 'streak_21']);
+
+/** Show the small "PRO" label only when locked and `badges.name` matches (must match DB display names). */
+const PRO_LABEL_BADGE_NAMES = new Set([
+  'One Month In Sync',
+  'Night Owls',
+  'Early Birds',
+  'In Sync',
+  'Vault Keeper',
+]);
+
+const CORAL_CTA = '#F48F4F';
+
+function showStripeComingSoonAlert() {
+  Alert.alert('Coming soon! Stripe payments are being set up.');
+}
+
+function showReflectionProAlert() {
+  Alert.alert('Full reflections are a Pro feature. Coming soon!');
+}
+
+function formatReflectionFreeTier(text: string): { preview: string; isTruncated: boolean } {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return { preview: '', isTruncated: false };
+  }
+  const parts = trimmed.split('. ').filter((p) => p.length > 0);
+  if (parts.length <= 2) {
+    return { preview: trimmed, isTruncated: false };
+  }
+  return { preview: `${parts.slice(0, 2).join('. ')}.`, isTruncated: true };
+}
+
 type MainTabParamList = {
   Dashboard: undefined;
   Question: undefined;
@@ -619,6 +658,46 @@ function emptyWrappedData(year: number): WrappedData {
   };
 }
 
+function WrappedTeaserModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  const year = new Date().getFullYear();
+
+  return (
+    <Modal visible={visible} animationType="fade" presentationStyle="fullScreen" onRequestClose={onClose}>
+      <View style={[styles.wrappedTeaserRoot, { backgroundColor: BG, paddingTop: insets.top }]}>
+        <TouchableOpacity
+          accessibilityLabel="Close"
+          onPress={onClose}
+          style={styles.wrappedTeaserClose}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons name="close-outline" size={28} color={CREAM} />
+        </TouchableOpacity>
+
+        <View style={styles.wrappedTeaserContent}>
+          <Image source={HOME_LOGO} style={styles.wrappedTeaserLogo} resizeMode="contain" />
+          <Text style={styles.wrappedTeaserHeadline}>Your {year} Spark Story is ready.</Text>
+          <Text style={styles.wrappedTeaserSub}>
+            Your love story is ready. Unlock Wrapped to see your year.
+          </Text>
+          <View style={styles.wrappedTeaserBlursRow}>
+            <View style={styles.wrappedTeaserBlurCard} />
+            <View style={styles.wrappedTeaserBlurCard} />
+            <View style={styles.wrappedTeaserBlurCard} />
+          </View>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={styles.wrappedTeaserCta}
+            onPress={() => showStripeComingSoonAlert()}
+          >
+            <Text style={styles.wrappedTeaserCtaText}>Unlock Everything — for both of you</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function OurSparkWrappedModal({
   visible,
   onClose,
@@ -1055,24 +1134,32 @@ function DashboardScreen({ userId }: { userId: string }) {
   const [todayStatus, setTodayStatus] = useState<DailyQuestionStatus>('not_answered');
   const [coupleId, setCoupleId] = useState<string | null>(null);
   const [reflection, setReflection] = React.useState<string | null>(null);
+  const [isPro, setIsPro] = useState(false);
   const [showWrapped, setShowWrapped] = useState(false);
+  const [showWrappedTeaser, setShowWrappedTeaser] = useState(false);
   const [wrappedData, setWrappedData] = useState<WrappedData | null>(null);
   const [wrappedLoading, setWrappedLoading] = useState(false);
   const didRegisterPushNotifications = useRef(false);
 
   const openWrapped = useCallback(async () => {
+    const { data: authData } = await supabase.auth.getUser();
+    const uid = authData.user?.id ?? userId;
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('couple_id')
+      .eq('id', uid)
+      .maybeSingle();
+    const cid = profile?.couple_id != null ? String(profile.couple_id) : null;
+    const pro = cid ? await checkIsPro(cid) : false;
+    if (!pro) {
+      setShowWrappedTeaser(true);
+      return;
+    }
+
     setShowWrapped(true);
     setWrappedLoading(true);
     const year = new Date().getFullYear();
     try {
-      const { data: authData } = await supabase.auth.getUser();
-      const uid = authData.user?.id ?? userId;
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('couple_id')
-        .eq('id', uid)
-        .maybeSingle();
-      const cid = profile?.couple_id != null ? String(profile.couple_id) : null;
       if (!cid) {
         setWrappedData(emptyWrappedData(year));
         return;
@@ -1162,8 +1249,11 @@ function DashboardScreen({ userId }: { userId: string }) {
       setVaultCount(0);
       setTodayStatus('not_answered');
       setReflection(null);
+      setIsPro(false);
       return;
     }
+
+    setIsPro(await checkIsPro(nextCoupleId));
 
     const { data: couple } = await supabase
       .from('couples')
@@ -1355,8 +1445,35 @@ function DashboardScreen({ userId }: { userId: string }) {
               <Ionicons name="sparkles-outline" size={16} color={PURPLE} />
               <Text style={styles.dbReflectionLabel}>{"THIS WEEK'S REFLECTION"}</Text>
             </View>
-            <Text style={styles.dbReflectionBody}>{reflection}</Text>
-            <Text style={styles.dbReflectionFooter}>Generated by OurSpark AI</Text>
+            {(() => {
+              if (isPro) {
+                return (
+                  <>
+                    <Text style={styles.dbReflectionBody}>{reflection}</Text>
+                    <Text style={styles.dbReflectionFooter}>Generated by OurSpark AI</Text>
+                  </>
+                );
+              }
+              const { preview, isTruncated } = formatReflectionFreeTier(reflection);
+              return (
+                <>
+                  <Text style={styles.dbReflectionBody}>{preview}</Text>
+                  {isTruncated ? (
+                    <>
+                      <Text style={styles.dbReflectionEllipsis}>...</Text>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={() => showReflectionProAlert()}
+                        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                      >
+                        <Text style={styles.dbReflectionReadFull}>Read your full reflection →</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : null}
+                  <Text style={styles.dbReflectionFooter}>Generated by OurSpark AI</Text>
+                </>
+              );
+            })()}
           </View>
         ) : null}
 
@@ -1397,6 +1514,11 @@ function DashboardScreen({ userId }: { userId: string }) {
         onClose={() => setShowWrapped(false)}
         data={wrappedData}
         loading={wrappedLoading}
+      />
+
+      <WrappedTeaserModal
+        visible={showWrappedTeaser}
+        onClose={() => setShowWrappedTeaser(false)}
       />
     </SafeAreaView>
   );
@@ -2644,6 +2766,8 @@ function BadgesScreen({ userId }: { userId: string }) {
   const [allBadges, setAllBadges] = useState<Record<string, unknown>[]>([]);
   const [coupleBadges, setCoupleBadges] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isPro, setIsPro] = useState(true);
+  const [hasCouple, setHasCouple] = useState(false);
 
   useEffect(() => {
     async function fetchBadges() {
@@ -2662,6 +2786,8 @@ function BadgesScreen({ userId }: { userId: string }) {
         console.log('No user id; skipping badge fetches');
         setAllBadges([]);
         setCoupleBadges([]);
+        setIsPro(true);
+        setHasCouple(false);
         setLoading(false);
         return;
       }
@@ -2674,6 +2800,15 @@ function BadgesScreen({ userId }: { userId: string }) {
 
       console.log('Profile:', JSON.stringify(profile));
       console.log('Profile error:', JSON.stringify(profileError));
+
+      if (profile?.couple_id != null) {
+        const cid = String(profile.couple_id);
+        setHasCouple(true);
+        setIsPro(await checkIsPro(cid));
+      } else {
+        setHasCouple(false);
+        setIsPro(true);
+      }
 
       const { data: allBadgesData, error: badgesError } = await supabase.from('badges').select('*');
       console.log('All badges:', JSON.stringify(allBadgesData));
@@ -2703,7 +2838,7 @@ function BadgesScreen({ userId }: { userId: string }) {
     }
 
     void fetchBadges();
-  }, []);
+  }, [userId]);
 
   const rows = useMemo((): BadgeDisplayRow[] => {
     const earnedBadgeIds = new Set(
@@ -2749,7 +2884,12 @@ function BadgesScreen({ userId }: { userId: string }) {
   }, [allBadges, coupleBadges]);
 
   const earnedCount = useMemo(() => rows.filter((r) => r.earned).length, [rows]);
-  const totalCount = allBadges.length;
+  const badgesCountLabel =
+    earnedCount === 0
+      ? 'Start your journey to earn badges'
+      : earnedCount === 1
+        ? '1 badge earned'
+        : `${earnedCount} badges earned`;
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -2759,9 +2899,7 @@ function BadgesScreen({ userId }: { userId: string }) {
       </View>
 
       <View style={styles.badgesStatsBar}>
-        <Text style={styles.badgesStatsText}>
-          {earnedCount} of {totalCount} badges earned
-        </Text>
+        <Text style={styles.badgesStatsText}>{badgesCountLabel}</Text>
       </View>
 
       {loading ? (
@@ -2776,28 +2914,61 @@ function BadgesScreen({ userId }: { userId: string }) {
         >
           <View style={styles.badgesGrid}>
             {rows.map((item) => {
-              const earned = item.earned;
+              const isFreeBadge = FREE_BADGE_SLUGS.has(item.slug);
+
               return (
                 <View key={item.id} style={styles.badgeCell}>
-                  <View style={[styles.badgeCard, earned ? styles.badgeCardEarned : styles.badgeCardLocked]}>
-                    <Ionicons
-                      name={item.icon as keyof typeof Ionicons.glyphMap}
-                      size={36}
-                      color={earned ? ORANGE : PURPLE}
-                      style={!earned ? styles.badgeIconLocked : undefined}
-                    />
-                    <Text style={earned ? styles.badgeNameEarned : styles.badgeNameLocked}>{item.name}</Text>
-                    <Text style={[styles.badgeDesc, !earned && styles.badgeDescLocked]}>{item.description}</Text>
-                    {!earned ? (
-                      <Text style={styles.badgeLockedLabel}>Locked</Text>
-                    ) : item.earnedAt ? (
-                      <Text style={styles.badgeDate}>{formatBadgeEarnedDate(item.earnedAt)}</Text>
-                    ) : null}
-                  </View>
+                  {item.earned ? (
+                    <View style={[styles.badgeCard, styles.badgeCardEarned]}>
+                      <Ionicons
+                        name={item.icon as keyof typeof Ionicons.glyphMap}
+                        size={36}
+                        color={ORANGE}
+                      />
+                      <Text style={styles.badgeNameEarned}>{item.name}</Text>
+                      <Text style={styles.badgeDesc}>{item.description}</Text>
+                      {item.earnedAt ? (
+                        <Text style={styles.badgeDate}>{formatBadgeEarnedDate(item.earnedAt)}</Text>
+                      ) : null}
+                    </View>
+                  ) : isFreeBadge ? (
+                    <View style={[styles.badgeCard, styles.badgeCardLocked]}>
+                      <Ionicons
+                        name={item.icon as keyof typeof Ionicons.glyphMap}
+                        size={36}
+                        color={PURPLE}
+                        style={styles.badgeIconLocked}
+                      />
+                      <Text style={styles.badgeNameFreePending}>{item.name}</Text>
+                      <Text style={styles.badgeDescFreePending}>{item.description}</Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.badgeCard, styles.badgeCardProOnlyMinimal]}>
+                      <Text style={styles.badgeProOnlyName}>{item.name}</Text>
+                      <Ionicons name="lock-closed-outline" size={24} color={ORANGE} />
+                      {PRO_LABEL_BADGE_NAMES.has(item.name) ? (
+                        <Text style={styles.badgeProOnlyPill}>PRO</Text>
+                      ) : null}
+                    </View>
+                  )}
                 </View>
               );
             })}
           </View>
+
+          {!isPro && hasCouple ? (
+            <View style={styles.badgesProUpgradeCard}>
+              <Text style={styles.badgesProUpgradeTitle}>More badges dropping soon.</Text>
+              <Text style={styles.badgesProUpgradeBody}>Unlock every badge — for both of you.</Text>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.proUpgradeBtn}
+                onPress={() => showStripeComingSoonAlert()}
+              >
+                <Text style={styles.proUpgradeBtnText}>Unlock Everything</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </ScrollView>
       )}
     </SafeAreaView>
@@ -2809,6 +2980,8 @@ function VaultScreen({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(true);
   const [moments, setMoments] = useState<VaultMomentDisplay[]>([]);
   const [firstVaultDateLabel, setFirstVaultDateLabel] = useState('');
+  const [isPro, setIsPro] = useState(true);
+  const [hasCouple, setHasCouple] = useState(false);
 
   const loadVault = useCallback(async () => {
     setLoading(true);
@@ -2821,11 +2994,17 @@ function VaultScreen({ userId }: { userId: string }) {
     if (!profile?.couple_id) {
       setMoments([]);
       setFirstVaultDateLabel('');
+      setIsPro(true);
+      setHasCouple(false);
       setLoading(false);
       return;
     }
 
+    setHasCouple(true);
+
     const coupleId = String(profile.couple_id);
+    const pro = await checkIsPro(coupleId);
+    setIsPro(pro);
 
     const { data: vaultRows, error: vaultError } = await supabase
       .from('vault')
@@ -2840,9 +3019,21 @@ function VaultScreen({ userId }: { userId: string }) {
       return;
     }
 
+    const cutoffMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const filteredVaultRows = pro
+      ? vaultRows
+      : vaultRows.filter((row) => {
+          const r = row as Record<string, unknown>;
+          const raw = r.saved_at ?? r.created_at;
+          if (!raw) {
+            return false;
+          }
+          return new Date(String(raw)).getTime() >= cutoffMs;
+        });
+
     const questionIds = [
       ...new Set(
-        vaultRows
+        filteredVaultRows
           .map((row) => {
             const r = row as Record<string, unknown>;
             return r.question_id != null ? String(r.question_id) : '';
@@ -2887,7 +3078,7 @@ function VaultScreen({ userId }: { userId: string }) {
       answersByQuestionId.set(qid, list);
     });
 
-    const built: VaultMomentDisplay[] = vaultRows.map((row) => {
+    const built: VaultMomentDisplay[] = filteredVaultRows.map((row) => {
       const r = row as Record<string, unknown>;
       const qid = r.question_id != null ? String(r.question_id) : '';
       const list = answersByQuestionId.get(qid) ?? [];
@@ -2910,7 +3101,7 @@ function VaultScreen({ userId }: { userId: string }) {
       };
     });
 
-    const oldest = [...vaultRows].sort((a, b) => {
+    const oldest = [...filteredVaultRows].sort((a, b) => {
       const ra = (a as Record<string, unknown>).saved_at ?? (a as Record<string, unknown>).created_at;
       const rb = (b as Record<string, unknown>).saved_at ?? (b as Record<string, unknown>).created_at;
       const ta = ra ? new Date(String(ra)).getTime() : 0;
@@ -3016,6 +3207,22 @@ function VaultScreen({ userId }: { userId: string }) {
                 <Text style={styles.vaultCardDate}>{m.savedAtLabel}</Text>
               </View>
             ))}
+          </View>
+        ) : null}
+
+        {!loading && hasCouple && !isPro ? (
+          <View style={styles.proUpgradeCard}>
+            <Text style={styles.proUpgradeTitle}>Your full story lives here.</Text>
+            <Text style={styles.proUpgradeBody}>
+              Unlock everything you&apos;ve ever shared — for both of you.
+            </Text>
+            <TouchableOpacity
+              activeOpacity={0.9}
+              style={styles.proUpgradeBtn}
+              onPress={() => showStripeComingSoonAlert()}
+            >
+              <Text style={styles.proUpgradeBtnText}>Unlock Everything</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
       </ScrollView>
@@ -3891,6 +4098,19 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     marginTop: 8,
   },
+  dbReflectionEllipsis: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 15,
+    opacity: 0.5,
+    marginTop: 4,
+  },
+  dbReflectionReadFull: {
+    fontFamily: FONT_BODY,
+    color: ORANGE,
+    fontSize: 13,
+    marginTop: 10,
+  },
   dbReflectionFooter: {
     fontFamily: FONT_BODY,
     color: CREAM,
@@ -4354,6 +4574,43 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     alignItems: 'center',
+    position: 'relative',
+  },
+  badgeCardProOnlyMinimal: {
+    justifyContent: 'center',
+    gap: 10,
+    minHeight: 120,
+  },
+  badgeProOnlyName: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 14,
+    textAlign: 'center',
+    opacity: 0.4,
+  },
+  badgeProOnlyPill: {
+    fontFamily: FONT_BODY,
+    color: ORANGE,
+    fontSize: 10,
+    letterSpacing: 1,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  badgeNameFreePending: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  badgeDescFreePending: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 4,
+    lineHeight: 16,
+    opacity: 0.85,
   },
   badgeCardEarned: {
     borderWidth: 2,
@@ -4404,6 +4661,133 @@ const styles = StyleSheet.create({
     fontSize: 10,
     textAlign: 'center',
     marginTop: 4,
+  },
+  proUpgradeCard: {
+    backgroundColor: CARD_BG,
+    borderWidth: 1,
+    borderColor: ORANGE,
+    borderRadius: 16,
+    padding: 20,
+    margin: 16,
+  },
+  proUpgradeTitle: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 18,
+    textAlign: 'center',
+  },
+  proUpgradeBody: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  proUpgradeBtn: {
+    backgroundColor: CORAL_CTA,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    marginTop: 16,
+    alignItems: 'center',
+    alignSelf: 'stretch',
+  },
+  proUpgradeBtnText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 16,
+  },
+  badgesProUpgradeCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 28,
+    padding: 20,
+    backgroundColor: CARD_BG,
+    borderWidth: 1,
+    borderColor: ORANGE,
+    borderRadius: 16,
+  },
+  badgesProUpgradeTitle: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 18,
+    textAlign: 'center',
+  },
+  badgesProUpgradeBody: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  wrappedTeaserRoot: {
+    flex: 1,
+  },
+  wrappedTeaserClose: {
+    position: 'absolute',
+    top: 8,
+    right: 16,
+    zIndex: 10,
+  },
+  wrappedTeaserContent: {
+    flex: 1,
+    paddingHorizontal: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingBottom: 48,
+  },
+  wrappedTeaserLogo: {
+    width: 100,
+    height: 100,
+    marginBottom: 24,
+  },
+  wrappedTeaserHeadline: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 32,
+    textAlign: 'center',
+  },
+  wrappedTeaserSub: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 16,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    marginTop: 16,
+    opacity: 0.7,
+    lineHeight: 24,
+  },
+  wrappedTeaserBlursRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 28,
+    marginBottom: 8,
+  },
+  wrappedTeaserBlurCard: {
+    width: 80,
+    height: 120,
+    margin: 8,
+    borderRadius: 12,
+    backgroundColor: CARD_BG,
+    opacity: 0.5,
+  },
+  wrappedTeaserCta: {
+    marginTop: 28,
+    backgroundColor: CORAL_CTA,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    alignSelf: 'stretch',
+    marginHorizontal: 8,
+  },
+  wrappedTeaserCtaText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 16,
+    textAlign: 'center',
   },
   badgeToastOuter: {
     position: 'absolute',

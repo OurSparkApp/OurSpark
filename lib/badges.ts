@@ -137,12 +137,19 @@ export type CheckAndAwardBadgesParams = {
  * Runs after a successful couple stats update on reveal (STATE 3).
  * Awards: First Spark, streak milestones, Night Owls, Early Birds, In Sync.
  */
+async function isCouplePro(coupleId: string): Promise<boolean> {
+  const { data } = await supabase.from('couples').select('is_pro').eq('id', coupleId).maybeSingle();
+  return data?.is_pro === true;
+}
+
 export async function checkAndAwardBadges(params: CheckAndAwardBadgesParams): Promise<void> {
   const { coupleId, userId, questionId, isPerfectSync, streakAfterUpdate, onBadgeAwarded } = params;
 
   if (!coupleId || !questionId) {
     return;
   }
+
+  const pro = await isCouplePro(coupleId);
 
   const rows = await fetchTodayAnswersForQuestion(coupleId, questionId);
   const mine = rows.find((r) => String(r.user_id ?? '') === userId);
@@ -169,20 +176,23 @@ export async function checkAndAwardBadges(params: CheckAndAwardBadgesParams): Pr
   ];
   for (const { slug, min } of streakMilestones) {
     if (streakAfterUpdate >= min) {
+      if (slug === 'streak_28' && !pro) {
+        continue;
+      }
       await insertCoupleBadge(coupleId, slug, onBadgeAwarded);
     }
   }
 
-  if (isNightOwlLocal(tMine) && isNightOwlLocal(tPartner)) {
+  if (pro && isNightOwlLocal(tMine) && isNightOwlLocal(tPartner)) {
     await insertCoupleBadge(coupleId, 'night_owls', onBadgeAwarded);
   }
 
-  if (isEarlyBirdLocal(tMine) && isEarlyBirdLocal(tPartner)) {
+  if (pro && isEarlyBirdLocal(tMine) && isEarlyBirdLocal(tPartner)) {
     await insertCoupleBadge(coupleId, 'early_birds', onBadgeAwarded);
   }
 
   const deltaMs = Math.abs(tMine.getTime() - tPartner.getTime());
-  if (deltaMs < 60_000) {
+  if (pro && deltaMs < 60_000) {
     await insertCoupleBadge(coupleId, 'in_sync', onBadgeAwarded);
   }
 }
@@ -198,6 +208,9 @@ export async function awardVaultKeeperIfFirstSave(
     .eq('couple_id', coupleId);
 
   if (error || count !== 1) {
+    return;
+  }
+  if (!(await isCouplePro(coupleId))) {
     return;
   }
   await insertCoupleBadge(coupleId, 'vault_keeper', onBadgeAwarded);
