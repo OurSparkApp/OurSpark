@@ -1140,6 +1140,7 @@ function DashboardScreen({ userId }: { userId: string }) {
   const [showWrappedTeaser, setShowWrappedTeaser] = useState(false);
   const [wrappedData, setWrappedData] = useState<WrappedData | null>(null);
   const [wrappedLoading, setWrappedLoading] = useState(false);
+  const [activePackLine, setActivePackLine] = useState<string | null>(null);
   const didRegisterPushNotifications = useRef(false);
 
   const openWrapped = useCallback(async () => {
@@ -1251,6 +1252,7 @@ function DashboardScreen({ userId }: { userId: string }) {
       setTodayStatus('not_answered');
       setReflection(null);
       setIsPro(false);
+      setActivePackLine(null);
       return;
     }
 
@@ -1274,6 +1276,26 @@ function DashboardScreen({ userId }: { userId: string }) {
       setVaultCount(vaultCountResult ?? 0);
     } else {
       setVaultCount(0);
+    }
+
+    const { data: activePackRow } = await supabase
+      .from('couple_packs')
+      .select('current_day, packs(name, emoji)')
+      .eq('couple_id', nextCoupleId)
+      .eq('status', 'active')
+      .maybeSingle();
+    const packsMetaRaw = (activePackRow as Record<string, unknown> | null)?.packs;
+    const packsMeta =
+      Array.isArray(packsMetaRaw) && packsMetaRaw.length > 0
+        ? (packsMetaRaw[0] as Record<string, unknown>)
+        : (packsMetaRaw as Record<string, unknown> | null);
+    if (packsMeta) {
+      const emoji = typeof packsMeta.emoji === 'string' ? packsMeta.emoji : '✨';
+      const name = typeof packsMeta.name === 'string' ? packsMeta.name : 'Pack';
+      const day = Math.max(1, Number((activePackRow as Record<string, unknown>).current_day ?? 1));
+      setActivePackLine(`${emoji} ${name} - Day ${day} active`);
+    } else {
+      setActivePackLine(null);
     }
 
     // Sundays only: generate via Edge Function if needed (DB row loaded below).
@@ -1413,6 +1435,7 @@ function DashboardScreen({ userId }: { userId: string }) {
               </TouchableOpacity>
             </View>
           ) : null}
+          {activePackLine ? <Text style={styles.dbActivePackLine}>{activePackLine}</Text> : null}
         </View>
 
         <View style={styles.dbStreakRow}>
@@ -1526,8 +1549,22 @@ function DashboardScreen({ userId }: { userId: string }) {
 }
 
 type DailyState = 'answer' | 'waiting' | 'reveal';
+type SpicyLevel = 'mild' | 'medium' | 'hot';
+type SpicyStage = 0 | 1 | 2 | 3 | 4;
+
+type ActivePackForToday = {
+  id: string;
+  packId: string;
+  currentDay: number;
+  durationDays: number;
+  name: string;
+  emoji: string;
+  color: string;
+};
 
 function DailyQuestionScreen({ userId }: { userId: string }) {
+  const navigation = useNavigation<BottomTabNavigationProp<any>>();
+  const pulseOpacity = useRef(new Animated.Value(0.4)).current;
   const [answer, setAnswer] = useState('');
   const todayLabel = useMemo(() => formatTodayLong(new Date()), []);
   const [dailyQuestion, setDailyQuestion] = useState('');
@@ -1555,6 +1592,51 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   const badgeToastQueueRef = useRef<string[]>([]);
   const badgeToastTranslateY = useRef(new Animated.Value(120)).current;
   const badgeToastDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [activePack, setActivePack] = useState<ActivePackForToday | null>(null);
+  const [showPackCompleteModal, setShowPackCompleteModal] = useState(false);
+  const [completedPack, setCompletedPack] = useState<ActivePackForToday | null>(null);
+  const [spicyStage, setSpicyStage] = useState<SpicyStage | null>(null);
+  const [spicyMyLevel, setSpicyMyLevel] = useState<SpicyLevel | null>(null);
+  const [spicyPartnerLevel, setSpicyPartnerLevel] = useState<SpicyLevel | null>(null);
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseOpacity, { toValue: 1, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulseOpacity, { toValue: 0.35, duration: 700, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulseOpacity]);
+
+  const isSpicyPackActive = Boolean(activePack && activePack.name === 'Spicy Pack');
+
+  const spicyLevelMeta = (level: SpicyLevel): { emoji: string; label: string } => {
+    if (level === 'mild') {
+      return { emoji: '🌶️', label: 'Mild' };
+    }
+    if (level === 'medium') {
+      return { emoji: '🌶️🌶️', label: 'Medium' };
+    }
+    return { emoji: '🌶️🌶️🌶️', label: 'Hot' };
+  };
+
+  const spicyServingLevel = (a: SpicyLevel, b: SpicyLevel): SpicyLevel => {
+    const rank: Record<SpicyLevel, number> = { mild: 0, medium: 1, hot: 2 };
+    return rank[a] <= rank[b] ? a : b;
+  };
+
+  const spicyMismatchCopy = (mine: SpicyLevel, theirs: SpicyLevel, partner: string): string => {
+    const key = `${mine}:${theirs}`;
+    if (key === 'hot:mild' || key === 'mild:hot') {
+      return `You're feeling Hot today. ${partner} is feeling Mild - and that's okay. Here's something for where you both are.`;
+    }
+    if (key === 'medium:mild' || key === 'mild:medium') {
+      return "Different temperatures today. That happens. Here's a question that works for both of you.";
+    }
+    return `You're running a little hotter today. ${partner} is feeling Medium - so here's something that works beautifully for both of you.`;
+  };
 
   useEffect(() => {
     partnerNameRef.current = partnerName;
@@ -1891,6 +1973,10 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       setCoupleId(null);
       setQuestionId(null);
       setDailyQuestion('');
+      setActivePack(null);
+      setSpicyStage(null);
+      setSpicyMyLevel(null);
+      setSpicyPartnerLevel(null);
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
@@ -1915,7 +2001,96 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
         return;
       }
 
-      const selectedQuestion = await selectTodaysQuestion();
+      const { data: activePackData } = await supabase
+        .from('couple_packs')
+        .select('*, packs(*)')
+        .eq('couple_id', cid)
+        .eq('status', 'active')
+        .single();
+      console.log('Active pack:', JSON.stringify(activePackData));
+
+      let selectedQuestion: Record<string, unknown> | null = null;
+      if (activePackData) {
+        const ap = activePackData as Record<string, unknown>;
+        const packId = ap.pack_id != null ? String(ap.pack_id) : '';
+        const day = Math.max(1, Number(ap.current_day ?? 1));
+        const packsRaw = ap.packs;
+        const packMeta =
+          Array.isArray(packsRaw) && packsRaw.length > 0
+            ? (packsRaw[0] as Record<string, unknown>)
+            : (packsRaw as Record<string, unknown> | null);
+
+        if (packMeta) {
+          const packName = typeof packMeta.name === 'string' ? packMeta.name : 'Pack';
+          setActivePack({
+            id: String(ap.id),
+            packId,
+            currentDay: day,
+            durationDays: Math.max(1, Number(packMeta.duration_days ?? packMeta.duration ?? 1)),
+            name: packName,
+            emoji: typeof packMeta.emoji === 'string' ? packMeta.emoji : '✨',
+            color: typeof packMeta.color === 'string' ? packMeta.color : PURPLE,
+          });
+
+          if (packName === 'Spicy Pack') {
+            const todayKey = formatLocalDateKey(new Date());
+            const { data: levelPicks } = await supabase
+              .from('spicy_level_picks')
+              .select('user_id, level')
+              .eq('couple_id', cid)
+              .eq('pick_date', todayKey);
+            const rows = (levelPicks ?? []) as Record<string, unknown>[];
+            const mine = rows.find((r) => String(r.user_id ?? '') === userId);
+            const partner = rows.find((r) => String(r.user_id ?? '') !== userId);
+            const myLevel =
+              typeof mine?.level === 'string' ? (mine.level as SpicyLevel) : null;
+            const partnerLevel =
+              typeof partner?.level === 'string' ? (partner.level as SpicyLevel) : null;
+            setSpicyMyLevel(myLevel);
+            setSpicyPartnerLevel(partnerLevel);
+
+            if (!myLevel) {
+              setSpicyStage(0);
+              setDailyLoadReady(true);
+              return;
+            }
+            if (!partnerLevel) {
+              setSpicyStage(1);
+              setDailyLoadReady(true);
+              return;
+            }
+            setSpicyStage(2);
+            setDailyLoadReady(true);
+            return;
+          }
+        } else {
+          setActivePack(null);
+        }
+
+        const { data: packQuestion } = await supabase
+          .from('pack_questions')
+          .select('*')
+          .eq('pack_id', packId)
+          .eq('day_number', day)
+          .single();
+
+        if (packQuestion) {
+          const pq = packQuestion as Record<string, unknown>;
+          const questionText =
+            (typeof pq.question_text === 'string' && pq.question_text.trim()) ||
+            (typeof pq.question === 'string' && pq.question.trim()) ||
+            (typeof pq.prompt === 'string' && pq.prompt.trim()) ||
+            '';
+          if (questionText) {
+            setDailyQuestion(questionText);
+            selectedQuestion = pq;
+          }
+        }
+      }
+
+      if (!selectedQuestion) {
+        selectedQuestion = await selectTodaysQuestion();
+      }
       console.log('Question loaded:', JSON.stringify(selectedQuestion));
 
       const selectedQuestionId = selectedQuestion?.id;
@@ -2106,6 +2281,37 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   }, [coupleId, dailyState, questionId, userId]);
 
   useEffect(() => {
+    if (!isSpicyPackActive || spicyStage !== 1 || !coupleId) {
+      return;
+    }
+    const todayKey = formatLocalDateKey(new Date());
+    const pollPicks = async () => {
+      const { data } = await supabase
+        .from('spicy_level_picks')
+        .select('user_id, level')
+        .eq('couple_id', coupleId)
+        .eq('pick_date', todayKey);
+      const rows = (data ?? []) as Record<string, unknown>[];
+      const mine = rows.find((r) => String(r.user_id ?? '') === userId);
+      const partner = rows.find((r) => String(r.user_id ?? '') !== userId);
+      const myLevel = typeof mine?.level === 'string' ? (mine.level as SpicyLevel) : null;
+      const partnerLevel = typeof partner?.level === 'string' ? (partner.level as SpicyLevel) : null;
+      if (myLevel) {
+        setSpicyMyLevel(myLevel);
+      }
+      if (partnerLevel) {
+        setSpicyPartnerLevel(partnerLevel);
+        setSpicyStage(2);
+      }
+    };
+    void pollPicks();
+    const id = setInterval(() => {
+      void pollPicks();
+    }, 5000);
+    return () => clearInterval(id);
+  }, [coupleId, isSpicyPackActive, spicyStage, userId]);
+
+  useEffect(() => {
     if (dailyState !== 'waiting' || !coupleId || !questionId) {
       return;
     }
@@ -2162,9 +2368,135 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       return;
     }
 
+    if (activePack) {
+      const nextDay = activePack.currentDay + 1;
+      await supabase
+        .from('couple_packs')
+        .update({ current_day: nextDay })
+        .eq('id', activePack.id);
+      if (nextDay > activePack.durationDays) {
+        await supabase
+          .from('couple_packs')
+          .update({ status: 'completed', completed_at: new Date().toISOString() })
+          .eq('id', activePack.id);
+        if (coupleId) {
+          await supabase.from('couples').update({ active_pack_id: null }).eq('id', coupleId);
+        }
+        setCompletedPack(activePack);
+        setShowPackCompleteModal(true);
+        setActivePack(null);
+      } else {
+        setActivePack((prev) => (prev ? { ...prev, currentDay: nextDay } : prev));
+      }
+    }
+
     setMyAnswer(answer.trim());
     setDailyState('waiting');
   };
+
+  const submitSpicyLevel = async (level: SpicyLevel) => {
+    if (!coupleId) {
+      return;
+    }
+    const todayKey = formatLocalDateKey(new Date());
+    const insertPayload = {
+      user_id: userId,
+      couple_id: coupleId,
+      pick_date: todayKey,
+      level,
+    };
+    const { error } = await supabase.from('spicy_level_picks').insert(insertPayload);
+    if (error) {
+      await supabase
+        .from('spicy_level_picks')
+        .update({ level })
+        .eq('user_id', userId)
+        .eq('couple_id', coupleId)
+        .eq('pick_date', todayKey);
+    }
+    setSpicyMyLevel(level);
+    setSpicyStage(1);
+  };
+
+  const loadSpicyQuestionForToday = async () => {
+    if (!coupleId || !activePack || !spicyMyLevel || !spicyPartnerLevel) {
+      return;
+    }
+    const serving = spicyServingLevel(spicyMyLevel, spicyPartnerLevel);
+    const { data: usedRows } = await supabase
+      .from('spicy_questions_used')
+      .select('spicy_question_id')
+      .eq('couple_id', coupleId)
+      .eq('run_number', 1);
+    const usedIds = (usedRows ?? [])
+      .map((r) => String((r as Record<string, unknown>).spicy_question_id ?? ''))
+      .filter(Boolean);
+
+    const pickOne = async (excludeIds: string[]) => {
+      let query = supabase.from('spicy_questions').select('*').eq('level', serving);
+      if (excludeIds.length > 0) {
+        query = query.not('id', 'in', `(${excludeIds.join(',')})`);
+      }
+      const { data } = await query;
+      const list = (data ?? []) as Record<string, unknown>[];
+      if (list.length === 0) {
+        return null;
+      }
+      const idx = Math.floor(Math.random() * list.length);
+      return list[idx];
+    };
+
+    let picked = await pickOne(usedIds);
+    if (!picked) {
+      const { data: levelRows } = await supabase.from('spicy_questions').select('id').eq('level', serving);
+      const levelIds = (levelRows ?? [])
+        .map((r) => String((r as Record<string, unknown>).id ?? ''))
+        .filter(Boolean);
+      if (levelIds.length > 0) {
+        await supabase
+          .from('spicy_questions_used')
+          .delete()
+          .eq('couple_id', coupleId)
+          .eq('run_number', 1)
+          .in('spicy_question_id', levelIds);
+      }
+      picked = await pickOne([]);
+    }
+    if (!picked) {
+      return;
+    }
+
+    const qText =
+      (typeof picked.question_text === 'string' && picked.question_text.trim()) ||
+      (typeof picked.question === 'string' && picked.question.trim()) ||
+      (typeof picked.prompt === 'string' && picked.prompt.trim()) ||
+      '';
+    if (!qText) {
+      return;
+    }
+
+    await supabase.from('spicy_questions_used').insert({
+      couple_id: coupleId,
+      spicy_question_id: String(picked.id),
+      run_number: 1,
+      level: serving,
+      created_at: new Date().toISOString(),
+    });
+
+    setDailyQuestion(qText);
+    setQuestionId(String(picked.id));
+    setDailyState('answer');
+    setSpicyStage(3);
+    setMyAnswer('');
+    setPartnerAnswer('');
+  };
+
+  useEffect(() => {
+    if (!isSpicyPackActive || spicyStage !== 3 || dailyState !== 'reveal') {
+      return;
+    }
+    setSpicyStage(4);
+  }, [dailyState, isSpicyPackActive, spicyStage]);
 
   const saveToVault = async () => {
     if (!coupleId || !questionId) {
@@ -2197,7 +2529,10 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   }, []);
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <SafeAreaView
+      style={[styles.screen, isSpicyPackActive ? { backgroundColor: '#7B1A1A' } : null]}
+      edges={['top']}
+    >
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -2209,6 +2544,99 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          {activePack ? (
+            <View style={[styles.todayPackPill, { backgroundColor: activePack.color }]}>
+              <Text style={styles.todayPackPillText}>
+                {activePack.emoji} {activePack.name} - Day {activePack.currentDay}
+              </Text>
+            </View>
+          ) : null}
+          {isSpicyPackActive && spicyStage === 0 ? (
+            <View style={styles.spicyPickerWrap}>
+              <Text style={styles.spicyDayLabel}>SPICY PACK - DAY {activePack?.currentDay ?? 1}</Text>
+              <Text style={styles.spicyTitle}>How are you feeling today?</Text>
+              <Text style={styles.spicySub}>
+                Pick your level. Your partner picks theirs. Neither of you sees the other's choice until you both pick.
+              </Text>
+
+              <TouchableOpacity activeOpacity={0.9} style={styles.spicyLevelBtn} onPress={() => void submitSpicyLevel('mild')}>
+                <Text style={styles.spicyLevelEmoji}>🌶️</Text>
+                <View style={styles.spicyLevelTextCol}>
+                  <Text style={styles.spicyLevelTitle}>Mild</Text>
+                  <Text style={styles.spicyLevelDesc}>Flirty and playful</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity activeOpacity={0.9} style={styles.spicyLevelBtn} onPress={() => void submitSpicyLevel('medium')}>
+                <Text style={styles.spicyLevelEmoji}>🌶️🌶️</Text>
+                <View style={styles.spicyLevelTextCol}>
+                  <Text style={styles.spicyLevelTitle}>Medium</Text>
+                  <Text style={styles.spicyLevelDesc}>Romantic and intentional</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity activeOpacity={0.9} style={styles.spicyLevelBtn} onPress={() => void submitSpicyLevel('hot')}>
+                <Text style={styles.spicyLevelEmojiHot}>🌶️🌶️🌶️</Text>
+                <View style={styles.spicyLevelTextCol}>
+                  <Text style={styles.spicyLevelTitle}>Hot</Text>
+                  <Text style={styles.spicyLevelDesc}>Bold and direct</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {isSpicyPackActive && spicyStage === 1 ? (
+            <View style={styles.spicyWaitWrap}>
+              <Text style={styles.spicyWaitTitle}>Waiting for {partnerName} to pick their level...</Text>
+              <View style={styles.spicyWaitDotWrap}>
+                <Animated.View style={[styles.spicyWaitDot, { opacity: pulseOpacity }]} />
+              </View>
+            </View>
+          ) : null}
+
+          {isSpicyPackActive && spicyStage === 2 && spicyMyLevel && spicyPartnerLevel ? (
+            <View style={styles.spicyRevealWrap}>
+              <View style={styles.spicyRevealRow}>
+                <View style={styles.spicyRevealCard}>
+                  <Text style={styles.spicyRevealWho}>You</Text>
+                  <Text style={styles.spicyRevealPick}>
+                    {spicyLevelMeta(spicyMyLevel).emoji} {spicyLevelMeta(spicyMyLevel).label}
+                  </Text>
+                </View>
+                <View style={styles.spicyRevealCard}>
+                  <Text style={styles.spicyRevealWho}>{partnerName}</Text>
+                  <Text style={styles.spicyRevealPick}>
+                    {spicyLevelMeta(spicyPartnerLevel).emoji} {spicyLevelMeta(spicyPartnerLevel).label}
+                  </Text>
+                </View>
+              </View>
+
+              {spicyMyLevel === spicyPartnerLevel ? (
+                <Text style={styles.spicyMatchText}>
+                  {spicyMyLevel === 'mild'
+                    ? "Same energy today. Let's see where this goes."
+                    : spicyMyLevel === 'medium'
+                      ? "You're both feeling it tonight."
+                      : "Oh. It's that kind of day."}
+                </Text>
+              ) : (
+                <Text style={styles.spicyMismatchText}>
+                  {spicyMismatchCopy(spicyMyLevel, spicyPartnerLevel, partnerName)}
+                </Text>
+              )}
+
+              <TouchableOpacity
+                activeOpacity={0.9}
+                style={styles.spicySeeQuestionBtn}
+                onPress={() => void loadSpicyQuestionForToday()}
+              >
+                <Text style={styles.spicySeeQuestionBtnText}>See Today's Question</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {!isSpicyPackActive || spicyStage === 3 || spicyStage === 4 ? (
+            <>
           <Text style={styles.todayLabel}>{"TODAY'S QUESTION"}</Text>
           <Text style={styles.dateAccent}>{todayLabel}</Text>
 
@@ -2271,6 +2699,8 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
                 <Text style={styles.inviteActionButtonText}>Save to Vault</Text>
               </TouchableOpacity>
             </View>
+          ) : null}
+            </>
           ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -2365,6 +2795,35 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
             </TouchableOpacity>
           </View>
         </Animated.View>
+      </Modal>
+
+      <Modal
+        visible={showPackCompleteModal}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setShowPackCompleteModal(false)}
+      >
+        <View style={[styles.packDoneRoot, { backgroundColor: completedPack?.color ?? PURPLE }]}>
+          <ScrollView style={styles.flex} contentContainerStyle={styles.packDoneContent}>
+            <Text style={styles.packDoneEmoji}>{completedPack?.emoji ?? '🎉'}</Text>
+            <Text style={styles.packDoneTitle}>Pack Complete!</Text>
+            <Text style={styles.packDoneName}>{completedPack?.name ?? 'Your Pack'}</Text>
+            <Text style={styles.packDoneBody}>You showed up every day. That's the whole thing.</Text>
+            <Text style={styles.packDoneSub}>Regular questions resume tomorrow.</Text>
+            <TouchableOpacity
+              activeOpacity={0.9}
+              style={styles.packDoneBtn}
+              onPress={() => {
+                setShowPackCompleteModal(false);
+                navigation.navigate('Dashboard');
+              }}
+            >
+              <Text style={[styles.packDoneBtnText, { color: completedPack?.color ?? PURPLE }]}>
+                Back to Dashboard
+              </Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
       </Modal>
 
       {badgeToast ? (
@@ -4391,6 +4850,15 @@ const styles = StyleSheet.create({
     shadowRadius: 14,
     elevation: 8,
   },
+  dbActivePackLine: {
+    fontFamily: FONT_BODY,
+    color: ORANGE,
+    fontSize: 12,
+    textAlign: 'center',
+    marginHorizontal: 20,
+    marginTop: -2,
+    marginBottom: 8,
+  },
   dbStatusSmall: {
     fontFamily: FONT_BODY,
     color: PURPLE,
@@ -4680,6 +5148,161 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
     paddingTop: 12,
   },
+  todayPackPill: {
+    alignSelf: 'center',
+    borderRadius: 100,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    marginBottom: 10,
+  },
+  todayPackPillText: {
+    fontFamily: FONT_BODY,
+    color: '#FFFFFF',
+    fontSize: 11,
+  },
+  spicyPickerWrap: {
+    paddingTop: 40,
+  },
+  spicyDayLabel: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 11,
+    letterSpacing: 2,
+    textAlign: 'center',
+    paddingTop: 40,
+  },
+  spicyTitle: {
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 28,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    marginTop: 10,
+  },
+  spicySub: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 14,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    lineHeight: 22,
+    marginTop: 8,
+    marginBottom: 10,
+  },
+  spicyLevelBtn: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 16,
+    padding: 20,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  spicyLevelEmoji: {
+    fontSize: 28,
+  },
+  spicyLevelEmojiHot: {
+    fontSize: 24,
+  },
+  spicyLevelTextCol: {
+    flex: 1,
+  },
+  spicyLevelTitle: {
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 20,
+  },
+  spicyLevelDesc: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 13,
+    marginTop: 2,
+  },
+  spicyWaitWrap: {
+    marginTop: 120,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  spicyWaitTitle: {
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 22,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+  },
+  spicyWaitDotWrap: {
+    marginTop: 16,
+    alignItems: 'center',
+  },
+  spicyWaitDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+  },
+  spicyRevealWrap: {
+    marginTop: 24,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+  },
+  spicyRevealRow: {
+    flexDirection: 'row',
+    width: '100%',
+    gap: 10,
+  },
+  spicyRevealCard: {
+    flex: 1,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+    padding: 14,
+    alignItems: 'center',
+  },
+  spicyRevealWho: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+  },
+  spicyRevealPick: {
+    marginTop: 6,
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 22,
+    textAlign: 'center',
+  },
+  spicyMatchText: {
+    marginTop: 16,
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 22,
+    textAlign: 'center',
+    paddingHorizontal: 10,
+  },
+  spicyMismatchText: {
+    marginTop: 16,
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 15,
+    lineHeight: 24,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  spicySeeQuestionBtn: {
+    marginTop: 24,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+  },
+  spicySeeQuestionBtnText: {
+    fontFamily: FONT_BODY,
+    color: '#7B1A1A',
+    fontSize: 16,
+  },
   todayLabel: {
     fontFamily: FONT_BODY,
     fontSize: 12,
@@ -4909,6 +5532,62 @@ const styles = StyleSheet.create({
     color: '#F1E9D2',
     fontSize: 15,
     textAlign: 'center',
+  },
+  packDoneRoot: {
+    flex: 1,
+  },
+  packDoneContent: {
+    alignItems: 'center',
+    paddingTop: 80,
+    paddingHorizontal: 24,
+    paddingBottom: 36,
+  },
+  packDoneEmoji: {
+    fontSize: 64,
+    textAlign: 'center',
+  },
+  packDoneTitle: {
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 36,
+    textAlign: 'center',
+    marginTop: 16,
+  },
+  packDoneName: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 18,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  packDoneBody: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 16,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+    lineHeight: 26,
+    fontStyle: 'italic',
+    marginTop: 20,
+  },
+  packDoneSub: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  packDoneBtn: {
+    marginTop: 32,
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  packDoneBtnText: {
+    fontFamily: FONT_BODY,
+    fontSize: 16,
   },
   milestoneShareCardWrap: {
     width: 320,
