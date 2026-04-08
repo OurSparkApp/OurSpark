@@ -90,6 +90,7 @@ function formatReflectionFreeTier(text: string): { preview: string; isTruncated:
 type MainTabParamList = {
   Dashboard: undefined;
   Question: undefined;
+  Packs: undefined;
   Vault: undefined;
   Badges: undefined;
 };
@@ -254,7 +255,7 @@ function formatTodayLong(date: Date): string {
   });
 }
 
-/** Monday 00:00 UTC as YYYY-MM-DD — matches `generate-reflection` Edge Function `week_starting`. */
+/** Monday 00:00 UTC as YYYY-MM-DD - matches `generate-reflection` Edge Function `week_starting`. */
 function getCurrentWeekMondayDateKeyUTC(): string {
   const now = new Date();
   const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -440,21 +441,21 @@ const WRAPPED_CATEGORY_COPY: Record<
   feels: {
     title: 'Feels People',
     description:
-      'You go deep. You asked the hard questions and showed up for the answers. That takes courage — and you did it together.',
+      'You go deep. You asked the hard questions and showed up for the answers. That takes courage - and you did it together.',
   },
   memory: {
     title: 'Memory People',
     description:
-      "You live in the good ones. All year you kept reaching back for the moments that made you. That's not nostalgia — that's knowing what matters.",
+      "You live in the good ones. All year you kept reaching back for the moments that made you. That's not nostalgia - that's knowing what matters.",
   },
   rightNow: {
     title: 'Right Now People',
     description:
-      "You're present. While everyone else was distracted you kept asking — how are you, really? Your partner felt that.",
+      "You're present. While everyone else was distracted you kept asking - how are you, really? Your partner felt that.",
   },
   playful: {
     title: 'Playful People',
-    description: 'You still make each other laugh. After everything — you still chose fun. Never stop.',
+    description: 'You still make each other laugh. After everything - you still chose fun. Never stop.',
   },
 };
 
@@ -513,7 +514,7 @@ function syncScoreWrappedCopy(score: number): string {
   if (score >= 40) {
     return "Opposites who keep choosing each other. That's actually the good stuff.";
   }
-  return "Turns out opposites don't just attract — they stick around.";
+  return "Turns out opposites don't just attract - they stick around.";
 }
 
 function isValentinesDayLocal(): boolean {
@@ -549,8 +550,8 @@ async function fetchWrappedData(
   const longestStreak = Math.max(0, Math.round(Number(coupleRow?.longest_streak ?? 0)));
 
   let bestQuestion = 'Your next Perfect Sync is waiting.';
-  let bestAnswer1 = '—';
-  let bestAnswer2 = '—';
+  let bestAnswer1 = '-';
+  let bestAnswer2 = '-';
 
   const { data: vaultRows } = await supabase
     .from('vault')
@@ -579,8 +580,8 @@ async function fetchWrappedData(
     const partner = rows.find((r) => String(r.user_id ?? '') !== activeUserId);
     const t1 = readAnswerTextFromRow(mine ?? {});
     const t2 = readAnswerTextFromRow(partner ?? {});
-    bestAnswer1 = t1 || '—';
-    bestAnswer2 = t2 || '—';
+    bestAnswer1 = t1 || '-';
+    bestAnswer2 = t2 || '-';
   }
 
   const { data: yearAnswers } = await supabase
@@ -650,8 +651,8 @@ function emptyWrappedData(year: number): WrappedData {
     compatibilityScore: 0,
     longestStreak: 0,
     bestQuestion: 'Your next Perfect Sync is waiting.',
-    bestAnswer1: '—',
-    bestAnswer2: '—',
+    bestAnswer1: '-',
+    bestAnswer2: '-',
     topCategory: 'feels',
     relationshipWord: 'Growth',
     humourStat: WRAPPED_HUMOUR_DEFAULT,
@@ -690,7 +691,7 @@ function WrappedTeaserModal({ visible, onClose }: { visible: boolean; onClose: (
             style={styles.wrappedTeaserCta}
             onPress={() => showStripeComingSoonAlert()}
           >
-            <Text style={styles.wrappedTeaserCtaText}>Unlock Everything — for both of you</Text>
+            <Text style={styles.wrappedTeaserCtaText}>Unlock Everything - for both of you</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -994,7 +995,7 @@ function OurSparkWrappedModal({
                     },
                   ]}
                 >
-                  Whatever you were doing — do it again.
+                  Whatever you were doing - do it again.
                 </Text>
                 <View style={styles.wrappedWhiteRule} />
                 <Text
@@ -1294,7 +1295,7 @@ function DashboardScreen({ userId }: { userId: string }) {
             setReflection(json.reflection.trim());
           }
         } catch {
-          // Edge function unavailable — reflection may still load from DB below
+          // Edge function unavailable - reflection may still load from DB below
         }
       }
     }
@@ -2959,7 +2960,7 @@ function BadgesScreen({ userId }: { userId: string }) {
           {!isPro && hasCouple ? (
             <View style={styles.badgesProUpgradeCard}>
               <Text style={styles.badgesProUpgradeTitle}>More badges dropping soon.</Text>
-              <Text style={styles.badgesProUpgradeBody}>Unlock every badge — for both of you.</Text>
+              <Text style={styles.badgesProUpgradeBody}>Unlock every badge - for both of you.</Text>
               <TouchableOpacity
                 activeOpacity={0.9}
                 style={styles.proUpgradeBtn}
@@ -3094,7 +3095,7 @@ function VaultScreen({ userId }: { userId: string }) {
 
       return {
         id: String(r.id ?? Math.random()),
-        questionText: questionTextById.get(qid) ?? '—',
+        questionText: questionTextById.get(qid) ?? '-',
         youSaid: readAnswerTextFromRow(mine ?? {}),
         theySaid: readAnswerTextFromRow(partner ?? {}),
         savedAtLabel,
@@ -3157,7 +3158,7 @@ function VaultScreen({ userId }: { userId: string }) {
             </View>
             <View style={styles.vaultStatsRowRight}>
               <Ionicons name="calendar-outline" size={16} color={CREAM} />
-              <Text style={styles.vaultStatsSince}>Since {firstVaultDateLabel || '—'}</Text>
+              <Text style={styles.vaultStatsSince}>Since {firstVaultDateLabel || '-'}</Text>
             </View>
           </View>
         ) : null}
@@ -3197,11 +3198,11 @@ function VaultScreen({ userId }: { userId: string }) {
                 <View style={styles.vaultAnswersRow}>
                   <View style={styles.vaultAnswerCol}>
                     <Text style={styles.vaultYouLabel}>You said:</Text>
-                    <Text style={styles.vaultAnswerBody}>{m.youSaid || '—'}</Text>
+                    <Text style={styles.vaultAnswerBody}>{m.youSaid || '-'}</Text>
                   </View>
                   <View style={styles.vaultAnswerCol}>
                     <Text style={styles.vaultTheyLabel}>They said:</Text>
-                    <Text style={styles.vaultAnswerBody}>{m.theySaid || '—'}</Text>
+                    <Text style={styles.vaultAnswerBody}>{m.theySaid || '-'}</Text>
                   </View>
                 </View>
                 <Text style={styles.vaultCardDate}>{m.savedAtLabel}</Text>
@@ -3214,7 +3215,7 @@ function VaultScreen({ userId }: { userId: string }) {
           <View style={styles.proUpgradeCard}>
             <Text style={styles.proUpgradeTitle}>Your full story lives here.</Text>
             <Text style={styles.proUpgradeBody}>
-              Unlock everything you&apos;ve ever shared — for both of you.
+              Unlock everything you&apos;ve ever shared - for both of you.
             </Text>
             <TouchableOpacity
               activeOpacity={0.9}
@@ -3226,6 +3227,445 @@ function VaultScreen({ userId }: { userId: string }) {
           </View>
         ) : null}
       </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+type PackRow = {
+  id: string;
+  name: string;
+  emoji: string;
+  color: string;
+  tagline: string;
+  description: string;
+  durationDays: number;
+  priceLabel: string;
+  isHoliday: boolean;
+};
+
+type CouplePackRow = {
+  id: string;
+  packId: string;
+  status: 'active' | 'paused' | 'completed' | 'owned';
+  currentDay: number;
+  activatedBy: string | null;
+  activatedAt: string | null;
+  pausedAt: string | null;
+};
+
+function parsePackRow(raw: Record<string, unknown>): PackRow | null {
+  if (raw.id == null) {
+    return null;
+  }
+  const durationRaw = Number(raw.duration_days ?? raw.duration ?? 0);
+  const priceRaw = raw.price ?? raw.price_label ?? '$0';
+  return {
+    id: String(raw.id),
+    name: typeof raw.name === 'string' ? raw.name : 'Pack',
+    emoji: typeof raw.emoji === 'string' ? raw.emoji : '✨',
+    color: typeof raw.color === 'string' ? raw.color : PURPLE,
+    tagline: typeof raw.tagline === 'string' ? raw.tagline : 'One question a day.',
+    description:
+      typeof raw.description === 'string'
+        ? raw.description
+        : 'A daily path to help you reconnect one question at a time.',
+    durationDays: Number.isFinite(durationRaw) && durationRaw > 0 ? Math.round(durationRaw) : 14,
+    priceLabel: typeof priceRaw === 'number' ? `$${priceRaw}` : String(priceRaw),
+    isHoliday: Boolean(raw.is_holiday),
+  };
+}
+
+function parseCouplePackRow(raw: Record<string, unknown>): CouplePackRow | null {
+  if (raw.id == null || raw.pack_id == null) {
+    return null;
+  }
+  const statusRaw = String(raw.status ?? 'owned');
+  const status: CouplePackRow['status'] =
+    statusRaw === 'active' || statusRaw === 'paused' || statusRaw === 'completed' ? statusRaw : 'owned';
+  return {
+    id: String(raw.id),
+    packId: String(raw.pack_id),
+    status,
+    currentDay: Math.max(0, Number(raw.current_day ?? 0)),
+    activatedBy: raw.activated_by != null ? String(raw.activated_by) : null,
+    activatedAt: typeof raw.activated_at === 'string' ? raw.activated_at : null,
+    pausedAt: typeof raw.paused_at === 'string' ? raw.paused_at : null,
+  };
+}
+
+function PacksScreen({ userId }: { userId: string }) {
+  const { width: screenWidth } = useWindowDimensions();
+  const packCardWidth = (screenWidth - 48) / 2;
+  const [loading, setLoading] = useState(true);
+  const [packs, setPacks] = useState<PackRow[]>([]);
+  const [couplePacks, setCouplePacks] = useState<CouplePackRow[]>([]);
+  const [coupleId, setCoupleId] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string>(userId);
+  const [selectedPack, setSelectedPack] = useState<PackRow | null>(null);
+  const [showPauseModal, setShowPauseModal] = useState(false);
+  const [toastText, setToastText] = useState<string | null>(null);
+
+  const showToast = useCallback((text: string) => {
+    setToastText(text);
+    setTimeout(() => setToastText(null), 2600);
+  }, []);
+
+  const loadPacks = useCallback(async () => {
+    setLoading(true);
+    const { data: authData } = await supabase.auth.getUser();
+    const uid = authData.user?.id ?? userId;
+    setCurrentUserId(uid);
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('couple_id')
+      .eq('id', uid)
+      .maybeSingle();
+    const cid = profile?.couple_id != null ? String(profile.couple_id) : null;
+    setCoupleId(cid);
+
+    const { data: packsRows } = await supabase.from('packs').select('*').order('name', { ascending: true });
+    const normalizedPacks = (packsRows ?? [])
+      .map((r) => parsePackRow(r as Record<string, unknown>))
+      .filter((p): p is PackRow => Boolean(p));
+    setPacks(normalizedPacks);
+
+    if (!cid) {
+      setCouplePacks([]);
+      setLoading(false);
+      return;
+    }
+
+    const { data: cpRows } = await supabase
+      .from('couple_packs')
+      .select('*')
+      .eq('couple_id', cid)
+      .order('activated_at', { ascending: false });
+    const normalizedCouplePacks = (cpRows ?? [])
+      .map((r) => parseCouplePackRow(r as Record<string, unknown>))
+      .filter((r): r is CouplePackRow => Boolean(r));
+    setCouplePacks(normalizedCouplePacks);
+    setLoading(false);
+  }, [userId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadPacks();
+    }, [loadPacks])
+  );
+
+  const activeCouplePack = useMemo(() => {
+    const activeOrPaused = couplePacks.find((r) => r.status === 'active' || r.status === 'paused');
+    return activeOrPaused ?? null;
+  }, [couplePacks]);
+
+  const activePack = useMemo(() => {
+    if (!activeCouplePack) {
+      return null;
+    }
+    return packs.find((p) => p.id === activeCouplePack.packId) ?? null;
+  }, [activeCouplePack, packs]);
+
+  const ownedPackIds = useMemo(() => new Set(couplePacks.map((r) => r.packId)), [couplePacks]);
+  const couplePackByPackId = useMemo(() => {
+    const map = new Map<string, CouplePackRow>();
+    for (const cp of couplePacks) {
+      if (!map.has(cp.packId)) {
+        map.set(cp.packId, cp);
+      }
+    }
+    return map;
+  }, [couplePacks]);
+  const corePacks = useMemo(() => {
+    const order = [
+      'Spicy Pack',
+      'Dream Life Pack',
+      'Silly Pack',
+      'The Deep End',
+      'Still Us Pack',
+      'Spring Forward',
+    ];
+    const rank = new Map(order.map((name, idx) => [name, idx]));
+    return packs
+      .filter((p) => !p.isHoliday)
+      .sort((a, b) => (rank.get(a.name) ?? 999) - (rank.get(b.name) ?? 999));
+  }, [packs]);
+  const holidayPacks = useMemo(() => packs.filter((p) => p.isHoliday), [packs]);
+
+  const canManageActivePack = Boolean(
+    activeCouplePack && activeCouplePack.activatedBy && activeCouplePack.activatedBy === currentUserId
+  );
+
+  const pausePack = useCallback(async () => {
+    if (!activeCouplePack) {
+      return;
+    }
+    await supabase
+      .from('couple_packs')
+      .update({ status: 'paused', paused_at: new Date().toISOString() })
+      .eq('id', activeCouplePack.id);
+    setShowPauseModal(false);
+    await loadPacks();
+  }, [activeCouplePack, loadPacks]);
+
+  const resumePack = useCallback(async () => {
+    if (!activeCouplePack || !activePack) {
+      return;
+    }
+    await supabase
+      .from('couple_packs')
+      .update({ status: 'active', paused_at: null })
+      .eq('id', activeCouplePack.id);
+    showToast(
+      `Your ${activePack.name} picks up where you left off. Day ${Math.max(1, activeCouplePack.currentDay + 1)} tomorrow.`
+    );
+    await loadPacks();
+  }, [activeCouplePack, activePack, loadPacks, showToast]);
+
+  const startPack = useCallback(
+    async (pack: PackRow) => {
+      if (!coupleId) {
+        return;
+      }
+      const existing = couplePackByPackId.get(pack.id);
+      let couplePackId: string | null = null;
+      if (existing) {
+        const { data } = await supabase
+          .from('couple_packs')
+          .update({
+            status: 'active',
+            current_day: 1,
+            activated_by: currentUserId,
+            activated_at: new Date().toISOString(),
+            paused_at: null,
+          })
+          .eq('id', existing.id)
+          .select('id')
+          .maybeSingle();
+        couplePackId = data?.id != null ? String(data.id) : existing.id;
+      } else {
+        const { data } = await supabase
+          .from('couple_packs')
+          .insert({
+            couple_id: coupleId,
+            pack_id: pack.id,
+            status: 'active',
+            current_day: 1,
+            activated_by: currentUserId,
+            activated_at: new Date().toISOString(),
+            paused_at: null,
+          })
+          .select('id')
+          .maybeSingle();
+        couplePackId = data?.id != null ? String(data.id) : null;
+      }
+      if (couplePackId) {
+        await supabase.from('couples').update({ active_pack_id: couplePackId }).eq('id', coupleId);
+      }
+      showToast(`Your ${pack.name} starts tomorrow. Get ready.`);
+      setSelectedPack(null);
+      await loadPacks();
+    },
+    [coupleId, couplePackByPackId, currentUserId, loadPacks, showToast]
+  );
+
+  const renderPackCard = (pack: PackRow) => {
+    const cp = couplePackByPackId.get(pack.id);
+    const isOwned = ownedPackIds.has(pack.id);
+    const isActive = cp?.status === 'active';
+    return (
+      <TouchableOpacity
+        key={pack.id}
+        activeOpacity={0.9}
+        style={[
+          styles.packCard,
+          { backgroundColor: pack.color, width: packCardWidth, height: 180 },
+        ]}
+        onPress={() => setSelectedPack(pack)}
+      >
+        <View style={styles.packCardContent}>
+          <Text style={styles.packCardEmoji}>{pack.emoji}</Text>
+          <Text style={styles.packCardName}>{pack.name}</Text>
+          <Text style={styles.packCardDescription} numberOfLines={2} ellipsizeMode="tail">
+            {pack.description}
+          </Text>
+          <View style={styles.packCardSpacer} />
+        </View>
+        <View style={styles.packCardBottomRow}>
+          <Text style={styles.packCardPrice}>{pack.priceLabel}</Text>
+          <Text style={styles.packCardDuration}>{pack.durationDays} days</Text>
+        </View>
+        {isOwned && !isActive ? (
+          <View style={styles.packOwnedBadge}>
+            <Text style={styles.packOwnedBadgeText}>Owned</Text>
+          </View>
+        ) : null}
+        {isActive ? (
+          <View style={[styles.packOwnedBadge, styles.packActiveBadge]}>
+            <Text style={[styles.packOwnedBadgeText, styles.packActiveBadgeText]}>Active</Text>
+          </View>
+        ) : null}
+      </TouchableOpacity>
+    );
+  };
+
+  const selectedCouplePack = selectedPack ? couplePackByPackId.get(selectedPack.id) ?? null : null;
+  const selectedOwned = selectedPack ? ownedPackIds.has(selectedPack.id) : false;
+  const hasAnotherActivePack = Boolean(
+    activeCouplePack && selectedPack && activeCouplePack.packId !== selectedPack.id && activeCouplePack.status === 'active'
+  );
+  const selectedIsActive = Boolean(selectedCouplePack?.status === 'active');
+  const selectedIsCompleted = Boolean(selectedCouplePack?.status === 'completed');
+
+  return (
+    <SafeAreaView style={styles.screen} edges={['top']}>
+      <ScrollView style={styles.flex} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <Text style={styles.packsHeaderTitle}>Packs</Text>
+        <Text style={styles.packsHeaderSub}>One question a day. A whole new direction.</Text>
+
+        {activePack && activeCouplePack ? (
+          <>
+            <Text style={styles.packsSectionLabel}>ACTIVE PACK</Text>
+            <View style={[styles.activePackCard, { backgroundColor: activePack.color }]}>
+              <View style={styles.activePackTop}>
+                <Text style={styles.activePackEmoji}>{activePack.emoji}</Text>
+                <Text style={styles.activePackName}>{activePack.name}</Text>
+              </View>
+              <Text style={styles.activePackDayText}>
+                Day {Math.max(1, activeCouplePack.currentDay)} of {activePack.durationDays}
+              </Text>
+              {activeCouplePack.status === 'active' ? (
+                <View style={styles.activePackStatusRow}>
+                  <View style={styles.activePackDot} />
+                  <Text style={styles.activePackStatusActive}>Active</Text>
+                </View>
+              ) : (
+                <Text style={styles.activePackPausedText}>
+                  Paused · Day {Math.max(1, activeCouplePack.currentDay)}
+                </Text>
+              )}
+              {canManageActivePack && activeCouplePack.status === 'active' ? (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.activePackPauseBtn}
+                  onPress={() => setShowPauseModal(true)}
+                >
+                  <Text style={styles.activePackPauseBtnText}>Pause</Text>
+                </TouchableOpacity>
+              ) : null}
+              {canManageActivePack && activeCouplePack.status === 'paused' ? (
+                <TouchableOpacity activeOpacity={0.9} style={styles.activePackResumeBtn} onPress={() => void resumePack()}>
+                  <Text style={[styles.activePackResumeBtnText, { color: activePack.color }]}>Resume Pack</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </>
+        ) : null}
+
+        <Text style={styles.packsSectionLabelCore}>CORE PACKS</Text>
+        <View style={styles.packGrid}>{corePacks.map((pack) => renderPackCard(pack))}</View>
+
+        <Text style={styles.packsSectionLabelCore}>HOLIDAY PACKS</Text>
+        <View style={styles.packGrid}>{holidayPacks.map((pack) => renderPackCard(pack))}</View>
+
+        {loading ? (
+          <View style={styles.packsLoadingWrap}>
+            <ActivityIndicator size="small" color={ORANGE} />
+          </View>
+        ) : null}
+      </ScrollView>
+
+      <Modal
+        visible={showPauseModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowPauseModal(false)}
+      >
+        <View style={styles.pauseOverlay}>
+          <View style={styles.pauseCard}>
+            <Text style={styles.pauseTitle}>Taking a break from the {activePack?.name ?? 'Pack'}?</Text>
+            <Text style={styles.pauseBody}>
+              No worries. Your regular OurSpark questions will pick back up tomorrow. Your pack will be right here
+              when you&apos;re ready.
+            </Text>
+            <TouchableOpacity activeOpacity={0.9} style={styles.pauseConfirmBtn} onPress={() => void pausePack()}>
+              <Text style={styles.pauseConfirmBtnText}>Pause Pack</Text>
+            </TouchableOpacity>
+            <TouchableOpacity activeOpacity={0.9} style={styles.pauseCancelBtn} onPress={() => setShowPauseModal(false)}>
+              <Text style={styles.pauseCancelBtnText}>Keep Going</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={selectedPack !== null} animationType="slide" presentationStyle="fullScreen">
+        <View style={[styles.packDetailRoot, { backgroundColor: selectedPack?.color ?? PURPLE }]}>
+          <TouchableOpacity
+            accessibilityLabel="Close"
+            onPress={() => setSelectedPack(null)}
+            style={styles.packDetailClose}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="close-outline" size={28} color="#FFFFFF" />
+          </TouchableOpacity>
+
+          {selectedPack ? (
+            <ScrollView style={styles.flex} contentContainerStyle={styles.packDetailContent}>
+              <Text style={styles.packDetailEmoji}>{selectedPack.emoji}</Text>
+              <Text style={styles.packDetailName}>{selectedPack.name}</Text>
+              <Text style={styles.packDetailTagline}>{selectedPack.tagline}</Text>
+              <Text style={styles.packDetailDuration}>
+                {selectedPack.durationDays} days · one question per day
+              </Text>
+              <View style={styles.packDetailDivider} />
+              <Text style={styles.packDetailDescription}>{selectedPack.description}</Text>
+              <Text style={styles.packDetailPrice}>{selectedPack.priceLabel}</Text>
+
+              {!selectedOwned ? (
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  style={styles.packDetailPrimaryBtn}
+                  onPress={() => showStripeComingSoonAlert()}
+                >
+                  <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Get This Pack</Text>
+                </TouchableOpacity>
+              ) : selectedIsCompleted ? (
+                <View style={styles.packDetailDisabledBtn}>
+                  <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                  <Text style={styles.packDetailDisabledBtnText}>Completed</Text>
+                </View>
+              ) : selectedIsActive ? (
+                <View style={styles.packDetailDisabledBtn}>
+                  <Text style={styles.packDetailDisabledBtnText}>Currently Active</Text>
+                </View>
+              ) : hasAnotherActivePack ? (
+                <>
+                  <View style={[styles.packDetailPrimaryBtn, styles.packDetailPrimaryBtnDisabled]}>
+                    <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Start Pack</Text>
+                  </View>
+                  <Text style={styles.packDetailDisabledHint}>Finish your active pack first</Text>
+                </>
+              ) : (
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  style={styles.packDetailPrimaryBtn}
+                  onPress={() => void startPack(selectedPack)}
+                >
+                  <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Start Pack</Text>
+                </TouchableOpacity>
+              )}
+            </ScrollView>
+          ) : null}
+        </View>
+      </Modal>
+
+      {toastText ? (
+        <View style={styles.packToastWrap} pointerEvents="none">
+          <View style={styles.packToastInner}>
+            <Text style={styles.packToastText}>{toastText}</Text>
+          </View>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -3268,6 +3708,15 @@ function MainTabs({ userId }: { userId: string }) {
         }}
       >
         {() => <DailyQuestionScreen userId={userId} />}
+      </Tab.Screen>
+      <Tab.Screen
+        name="Packs"
+        options={{
+          tabBarLabel: 'Packs',
+          tabBarIcon: ({ color }) => <Ionicons name="cube-outline" size={24} color={color} />,
+        }}
+      >
+        {() => <PacksScreen userId={userId} />}
       </Tab.Screen>
       <Tab.Screen
         name="Vault"
@@ -5278,6 +5727,357 @@ const styles = StyleSheet.create({
     height: 60,
     alignSelf: 'center',
     marginTop: 16,
+  },
+  packsHeaderTitle: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 28,
+    textAlign: 'left',
+    paddingTop: 60,
+    paddingHorizontal: 24,
+  },
+  packsHeaderSub: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    paddingHorizontal: 24,
+    paddingBottom: 16,
+  },
+  packsSectionLabel: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    fontSize: 11,
+    letterSpacing: 2,
+    paddingHorizontal: 24,
+    paddingBottom: 8,
+  },
+  packsSectionLabelCore: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    fontSize: 11,
+    letterSpacing: 2,
+    paddingHorizontal: 24,
+    marginTop: 24,
+    paddingBottom: 8,
+  },
+  activePackCard: {
+    marginHorizontal: 24,
+    borderRadius: 18,
+    padding: 18,
+    minHeight: 158,
+  },
+  activePackTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  activePackEmoji: {
+    fontSize: 32,
+  },
+  activePackName: {
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 22,
+    flex: 1,
+  },
+  activePackDayText: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 14,
+    marginTop: 10,
+  },
+  activePackStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+  },
+  activePackDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4ADE80',
+  },
+  activePackStatusActive: {
+    fontFamily: FONT_BODY,
+    color: '#4ADE80',
+    fontSize: 12,
+  },
+  activePackPausedText: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    marginTop: 8,
+  },
+  activePackPauseBtn: {
+    position: 'absolute',
+    right: 14,
+    bottom: 12,
+  },
+  activePackPauseBtnText: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 13,
+  },
+  activePackResumeBtn: {
+    marginTop: 14,
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  activePackResumeBtnText: {
+    fontFamily: FONT_BODY,
+    fontSize: 14,
+  },
+  packGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    rowGap: 8,
+    marginBottom: 4,
+  },
+  packCard: {
+    borderRadius: 16,
+    padding: 16,
+    overflow: 'hidden',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+  },
+  packCardContent: {
+    flex: 1,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+  packCardEmoji: {
+    fontSize: 24,
+  },
+  packCardName: {
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 15,
+    lineHeight: 20,
+    marginTop: 8,
+  },
+  packCardDescription: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 4,
+  },
+  packCardSpacer: {
+    flex: 1,
+  },
+  packCardBottomRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+  },
+  packCardPrice: {
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 16,
+  },
+  packCardDuration: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 11,
+  },
+  packOwnedBadge: {
+    position: 'absolute',
+    right: 10,
+    top: 10,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  packOwnedBadgeText: {
+    fontFamily: FONT_BODY,
+    color: '#FFFFFF',
+    fontSize: 10,
+  },
+  packActiveBadge: {
+    backgroundColor: '#4ADE80',
+  },
+  packActiveBadgeText: {
+    color: '#07211A',
+  },
+  packsLoadingWrap: {
+    paddingVertical: 20,
+    alignItems: 'center',
+  },
+  pauseOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  pauseCard: {
+    backgroundColor: BG,
+    borderRadius: 20,
+    padding: 32,
+  },
+  pauseTitle: {
+    fontFamily: FONT_HEADING,
+    color: CREAM,
+    fontSize: 22,
+    textAlign: 'center',
+  },
+  pauseBody: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 15,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginTop: 12,
+  },
+  pauseConfirmBtn: {
+    marginTop: 20,
+    backgroundColor: PURPLE,
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  pauseConfirmBtnText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 15,
+  },
+  pauseCancelBtn: {
+    marginTop: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: CREAM,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  pauseCancelBtnText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 15,
+  },
+  packDetailRoot: {
+    flex: 1,
+  },
+  packDetailClose: {
+    position: 'absolute',
+    right: 16,
+    top: 56,
+    zIndex: 10,
+  },
+  packDetailContent: {
+    paddingHorizontal: 24,
+    paddingBottom: 36,
+    alignItems: 'center',
+  },
+  packDetailEmoji: {
+    fontSize: 64,
+    marginTop: 80,
+  },
+  packDetailName: {
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 36,
+    textAlign: 'center',
+    marginTop: 12,
+  },
+  packDetailTagline: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 15,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    marginTop: 12,
+  },
+  packDetailDuration: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  packDetailDivider: {
+    width: '100%',
+    height: 1,
+    backgroundColor: '#FFFFFF',
+    opacity: 0.2,
+    marginVertical: 24,
+  },
+  packDetailDescription: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 15,
+    textAlign: 'center',
+    lineHeight: 24,
+    paddingHorizontal: 24,
+  },
+  packDetailPrice: {
+    fontFamily: FONT_HEADING,
+    color: '#FFFFFF',
+    fontSize: 48,
+    textAlign: 'center',
+    marginTop: 20,
+  },
+  packDetailPrimaryBtn: {
+    marginTop: 20,
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  packDetailPrimaryBtnDisabled: {
+    opacity: 0.5,
+  },
+  packDetailPrimaryBtnText: {
+    fontFamily: FONT_BODY,
+    fontSize: 16,
+  },
+  packDetailDisabledBtn: {
+    marginTop: 20,
+    width: '100%',
+    borderRadius: 12,
+    paddingVertical: 14,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    opacity: 0.5,
+  },
+  packDetailDisabledBtnText: {
+    fontFamily: FONT_BODY,
+    color: '#FFFFFF',
+    fontSize: 16,
+  },
+  packDetailDisabledHint: {
+    fontFamily: FONT_BODY,
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 13,
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  packToastWrap: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 24,
+  },
+  packToastInner: {
+    backgroundColor: CARD_BG,
+    borderWidth: 1,
+    borderColor: ORANGE,
+    borderRadius: 12,
+    padding: 16,
+  },
+  packToastText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 14,
+    textAlign: 'center',
   },
   wrappedEndUrl: {
     fontSize: 11,
