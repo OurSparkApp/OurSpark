@@ -212,6 +212,25 @@ function formatTodayLong(date: Date): string {
   });
 }
 
+/** Monday 00:00 UTC as YYYY-MM-DD — matches `generate-reflection` Edge Function `week_starting`. */
+function getCurrentWeekMondayDateKeyUTC(): string {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const day = d.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setUTCDate(d.getUTCDate() + diff);
+  d.setUTCHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
+}
+
+function getGenerateReflectionInvokeUrl(): string | null {
+  const base = process.env.EXPO_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '');
+  if (!base) {
+    return null;
+  }
+  return `${base}/functions/v1/generate-reflection`;
+}
+
 const ANSWER_MATCH_STOP_WORDS = new Set([
   'the',
   'a',
@@ -363,7 +382,51 @@ function DashboardScreen({ userId }: { userId: string }) {
   const [compatibilityScore, setCompatibilityScore] = useState(0);
   const [vaultCount, setVaultCount] = useState(0);
   const [todayStatus, setTodayStatus] = useState<DailyQuestionStatus>('not_answered');
+  const [coupleId, setCoupleId] = useState<string | null>(null);
+  const [reflection, setReflection] = React.useState<string | null>(null);
   const didRegisterPushNotifications = useRef(false);
+
+  React.useEffect(() => {
+    console.log('Dashboard mounted');
+    const getReflection = async () => {
+      console.log('Getting reflection...');
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        console.log('No user');
+        return;
+      }
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('couple_id')
+        .eq('id', user.id)
+        .single();
+      console.log('Profile for reflection:', JSON.stringify(profile));
+      if (!profile?.couple_id) {
+        console.log('No couple_id');
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('reflections')
+        .select('reflection_text')
+        .eq('couple_id', profile.couple_id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      console.log('Reflection result:', JSON.stringify(data));
+      console.log('Reflection error:', JSON.stringify(error));
+
+      if (data?.reflection_text) {
+        setReflection(data.reflection_text);
+        console.log('Reflection set!');
+      }
+    };
+    void getReflection();
+  }, []);
 
   useEffect(() => {
     const loop = Animated.loop(
@@ -376,7 +439,7 @@ function DashboardScreen({ userId }: { userId: string }) {
     return () => loop.stop();
   }, [pulseOpacity]);
 
-  const loadDashboardData = useCallback(async () => {
+  const fetchDashboardData = useCallback(async () => {
     const { data: authData } = await supabase.auth.getUser();
     const uid = authData.user?.id ?? userId;
 
@@ -394,20 +457,22 @@ function DashboardScreen({ userId }: { userId: string }) {
         : 'there';
     setFirstName(name);
 
-    const coupleId = profile?.couple_id ? String(profile.couple_id) : null;
+    const nextCoupleId = profile?.couple_id ? String(profile.couple_id) : null;
+    setCoupleId(nextCoupleId);
 
-    if (!coupleId) {
+    if (!nextCoupleId) {
       setCurrentStreak(0);
       setCompatibilityScore(0);
       setVaultCount(0);
       setTodayStatus('not_answered');
+      setReflection(null);
       return;
     }
 
     const { data: couple } = await supabase
       .from('couples')
       .select('current_streak, compatibility_score')
-      .eq('id', coupleId)
+      .eq('id', nextCoupleId)
       .maybeSingle();
 
     setCurrentStreak(Number(couple?.current_streak ?? 0));
@@ -416,7 +481,7 @@ function DashboardScreen({ userId }: { userId: string }) {
     const { count: vaultCountResult, error: vaultError } = await supabase
       .from('vault')
       .select('*', { count: 'exact', head: true })
-      .eq('couple_id', coupleId);
+      .eq('couple_id', nextCoupleId);
 
     if (!vaultError) {
       setVaultCount(vaultCountResult ?? 0);
@@ -424,30 +489,70 @@ function DashboardScreen({ userId }: { userId: string }) {
       setVaultCount(0);
     }
 
+    // Sundays only: generate via Edge Function if needed (DB row loaded below).
+    if (new Date().getDay() === 0) {
+      const invokeUrl = getGenerateReflectionInvokeUrl();
+      const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (invokeUrl && anonKey) {
+        try {
+          const res = await fetch(invokeUrl, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${anonKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ couple_id: nextCoupleId }),
+          });
+          const json = (await res.json()) as { reflection?: string };
+          if (res.ok && typeof json.reflection === 'string' && json.reflection.trim()) {
+            setReflection(json.reflection.trim());
+          }
+        } catch {
+          // Edge function unavailable — reflection may still load from DB below
+        }
+      }
+    }
+
     const qRow = await resolveTodayQuestionRow();
     const qId = qRow?.id != null ? String(qRow.id) : null;
     if (!qId) {
       setTodayStatus('not_answered');
-      return;
+    } else {
+      const rows = await fetchTodayAnswersRows(nextCoupleId, qId);
+      const mine = rows.find((r) => String(r.user_id ?? '') === uid);
+      const partner = rows.find((r) => String(r.user_id ?? '') !== uid);
+
+      if (mine && partner) {
+        setTodayStatus('reveal_ready');
+      } else if (mine) {
+        setTodayStatus('waiting');
+      } else {
+        setTodayStatus('not_answered');
+      }
     }
 
-    const rows = await fetchTodayAnswersRows(coupleId, qId);
-    const mine = rows.find((r) => String(r.user_id ?? '') === uid);
-    const partner = rows.find((r) => String(r.user_id ?? '') !== uid);
+    const coupleId = nextCoupleId;
 
-    if (mine && partner) {
-      setTodayStatus('reveal_ready');
-    } else if (mine) {
-      setTodayStatus('waiting');
-    } else {
-      setTodayStatus('not_answered');
+    // Fetch weekly reflection
+    console.log('Fetching reflection inside main fetch, couple_id:', coupleId);
+    const { data: reflectionData, error: reflectionError } = await supabase
+      .from('reflections')
+      .select('reflection_text')
+      .eq('couple_id', coupleId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+    console.log('Reflection data:', JSON.stringify(reflectionData));
+    console.log('Reflection error:', JSON.stringify(reflectionError));
+    if (reflectionData) {
+      setReflection(reflectionData.reflection_text);
     }
   }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
-      loadDashboardData();
-    }, [loadDashboardData])
+      fetchDashboardData();
+    }, [fetchDashboardData])
   );
 
   useFocusEffect(
@@ -547,6 +652,17 @@ function DashboardScreen({ userId }: { userId: string }) {
             )}
           </View>
         </View>
+
+        {reflection !== null ? (
+          <View style={styles.dbReflectionCard}>
+            <View style={styles.dbReflectionLabelRow}>
+              <Ionicons name="sparkles-outline" size={16} color={PURPLE} />
+              <Text style={styles.dbReflectionLabel}>{"THIS WEEK'S REFLECTION"}</Text>
+            </View>
+            <Text style={styles.dbReflectionBody}>{reflection}</Text>
+            <Text style={styles.dbReflectionFooter}>Generated by OurSpark AI</Text>
+          </View>
+        ) : null}
 
         <TouchableOpacity activeOpacity={0.9} style={styles.dbVaultCard} onPress={() => {}}>
           <View style={styles.dbVaultTitleRow}>
@@ -3030,6 +3146,37 @@ const styles = StyleSheet.create({
     color: CREAM,
     fontSize: 12,
     textAlign: 'center',
+  },
+  dbReflectionCard: {
+    backgroundColor: CARD_BG,
+    margin: 16,
+    padding: 20,
+    borderRadius: 16,
+  },
+  dbReflectionLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  dbReflectionLabel: {
+    fontFamily: FONT_BODY,
+    color: PURPLE,
+    fontSize: 11,
+    letterSpacing: 1.5,
+  },
+  dbReflectionBody: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 15,
+    lineHeight: 24,
+    marginTop: 8,
+  },
+  dbReflectionFooter: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 11,
+    opacity: 0.4,
+    marginTop: 12,
   },
   dbVaultCard: {
     backgroundColor: CARD_BG,
