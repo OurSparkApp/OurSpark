@@ -3,12 +3,14 @@ import { RedHatDisplay_700Bold } from '@expo-google-fonts/red-hat-display';
 import { Ionicons } from '@expo/vector-icons';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   NavigationContainer,
   createNavigationContainerRef,
   useFocusEffect,
   useNavigation,
 } from '@react-navigation/native';
+import * as Clipboard from 'expo-clipboard';
 import * as Notifications from 'expo-notifications';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
@@ -20,6 +22,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  DeviceEventEmitter,
   Dimensions,
   Image,
   KeyboardAvoidingView,
@@ -112,12 +115,33 @@ const HOME_LOGO = require('./assets/OurSpark_Logo_White_font_for_dark_background
 const Tab = createBottomTabNavigator();
 type AppStage = 'marketing' | 'auth' | 'personalization' | 'invite' | 'main';
 
-function formatLocalDateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
+function getQuestionCycleDate(date: Date): Date {
+  const cycleDate = new Date(date);
+  if (cycleDate.getHours() < 4) {
+    cycleDate.setDate(cycleDate.getDate() - 1);
+  }
+  return cycleDate;
+}
+
+/** Local calendar date key for the OurSpark "day" (rolls at 4am local). */
+function formatLocalDateKey(ref: Date = new Date()): string {
+  const cycleDate = getQuestionCycleDate(ref);
+  const year = cycleDate.getFullYear();
+  const month = `${cycleDate.getMonth() + 1}`.padStart(2, '0');
+  const day = `${cycleDate.getDate()}`.padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
+
+/** Normalize `couples.last_answered_date` from DB (date or timestamptz) to YYYY-MM-DD for comparisons. */
+function coupleDateKeyFromDbValue(value: unknown): string {
+  const s = String(value ?? '').trim();
+  if (s.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(s)) {
+    return s.slice(0, 10);
+  }
+  return s;
+}
+
+const DASHBOARD_COUPLE_STATS_REFRESH = 'ourspark:dashboardCoupleStatsRefresh';
 
 function getDayOfYear(date: Date): number {
   const start = new Date(date.getFullYear(), 0, 0);
@@ -156,8 +180,8 @@ function readAnswerTextFromRow(answerRow: Record<string, unknown>): string {
   return '';
 }
 
-async function resolveTodayQuestionRow(): Promise<Record<string, unknown> | null> {
-  const today = new Date();
+async function resolveTodayQuestionRow(ref: Date = new Date()): Promise<Record<string, unknown> | null> {
+  const questionCycleDate = getQuestionCycleDate(ref);
 
   const { data: allQuestions, error: allQuestionsError } = await supabase.from('questions').select('*');
 
@@ -170,7 +194,7 @@ async function resolveTodayQuestionRow(): Promise<Record<string, unknown> | null
     if (rowMap.scheduled_date == null) {
       return false;
     }
-    if (!scheduledDateMatchesTodayMonthDay(rowMap.scheduled_date, today)) {
+    if (!scheduledDateMatchesTodayMonthDay(rowMap.scheduled_date, questionCycleDate)) {
       return false;
     }
     return Boolean(readQuestionTextFromRow(rowMap));
@@ -191,24 +215,28 @@ async function resolveTodayQuestionRow(): Promise<Record<string, unknown> | null
     return null;
   }
 
-  const questionIndex = getDayOfYear(today) % validQuestions.length;
+  const questionIndex = Math.abs(getDayOfYear(questionCycleDate) % validQuestions.length);
   return validQuestions[questionIndex].row;
 }
 
-function getLocalDayBounds(): { startIso: string; endIso: string } {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
+/** Start/end instants for the local OurSpark day window [4am local, next day 4am local). */
+function getLocalDayBounds(ref: Date = new Date()): { startIso: string; endIso: string } {
+  const cycleDate = getQuestionCycleDate(ref);
+  const y = cycleDate.getFullYear();
+  const m = cycleDate.getMonth();
+  const d = cycleDate.getDate();
+  const start = new Date(y, m, d, 4, 0, 0, 0);
+  const end = new Date(y, m, d + 1, 4, 0, 0, 0);
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 }
 
 /** Today's answers for this couple + question (local calendar day). Prefers submitted_at; falls back to created_at. */
 async function fetchTodayAnswersRows(
   activeCoupleId: string,
-  activeQuestionId: string
+  activeQuestionId: string,
+  refTime: Date = new Date()
 ): Promise<Record<string, unknown>[]> {
-  const { startIso, endIso } = getLocalDayBounds();
+  const { startIso, endIso } = getLocalDayBounds(refTime);
 
   const fetchByColumn = async (column: 'submitted_at' | 'created_at') => {
     const { data, error } = await supabase
@@ -234,6 +262,120 @@ async function fetchTodayAnswersRows(
   return (await fetchByColumn('created_at')) ?? [];
 }
 
+type TodaysQuestionForAnswersResult = {
+  questionId: string | null;
+  selectedQuestion: Record<string, unknown> | null;
+  questionText: string;
+};
+
+/**
+ * Single resolver for today's question row + id + display text (active pack / Spicy / pool).
+ * Dashboard and Today tab must use this so `question_id` in `answers` always matches.
+ */
+async function resolveTodaysQuestionForCoupleAnswers(
+  coupleId: string,
+  userId: string,
+  opts?: { activePackData?: Record<string, unknown> | null; now?: Date }
+): Promise<TodaysQuestionForAnswersResult> {
+  const now = opts?.now ?? new Date();
+
+  let activePackData: Record<string, unknown> | null = null;
+  if (opts !== undefined && opts.activePackData !== undefined) {
+    activePackData = opts.activePackData;
+  } else {
+    const { data } = await supabase
+      .from('couple_packs')
+      .select('*, packs(*)')
+      .eq('couple_id', coupleId)
+      .eq('status', 'active')
+      .maybeSingle();
+    activePackData = (data ?? null) as Record<string, unknown> | null;
+  }
+
+  if (!activePackData) {
+    const row = await resolveTodayQuestionRow(now);
+    const id = row?.id != null ? String(row.id) : null;
+    const text = row ? (readQuestionTextFromRow(row) ?? '') : '';
+    return { questionId: id, selectedQuestion: row, questionText: text };
+  }
+
+  const ap = activePackData;
+  const packId = ap.pack_id != null ? String(ap.pack_id) : '';
+  const day = Math.max(1, Number(ap.current_day ?? 1));
+  const packsRaw = ap.packs;
+  const packMeta =
+    Array.isArray(packsRaw) && packsRaw.length > 0
+      ? (packsRaw[0] as Record<string, unknown>)
+      : (packsRaw as Record<string, unknown> | null);
+  const packName = typeof packMeta?.name === 'string' ? packMeta.name : '';
+
+  if (packName === 'Spicy Pack') {
+    const todayKey = formatLocalDateKey(now);
+    const { data: levelPicks } = await supabase
+      .from('spicy_level_picks')
+      .select('user_id, level')
+      .eq('couple_id', coupleId)
+      .eq('pick_date', todayKey);
+    const pickRows = (levelPicks ?? []) as Record<string, unknown>[];
+    const myPick = pickRows.find((r) => String(r.user_id ?? '') === userId);
+    const partnerPick = pickRows.find((r) => String(r.user_id ?? '') !== userId);
+    const myLevel = typeof myPick?.level === 'string' ? myPick.level : null;
+    const partnerLevel = typeof partnerPick?.level === 'string' ? partnerPick.level : null;
+    if (!myLevel || !partnerLevel) {
+      return { questionId: null, selectedQuestion: null, questionText: '' };
+    }
+
+    const { startIso, endIso } = getLocalDayBounds(now);
+    const { data: usedToday } = await supabase
+      .from('spicy_questions_used')
+      .select('spicy_question_id, created_at')
+      .eq('couple_id', coupleId)
+      .gte('created_at', startIso)
+      .lt('created_at', endIso)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const usedRow = usedToday?.[0] as Record<string, unknown> | undefined;
+    const spicyQid = usedRow?.spicy_question_id;
+    if (spicyQid == null || !String(spicyQid)) {
+      return { questionId: null, selectedQuestion: null, questionText: '' };
+    }
+    const sid = String(spicyQid);
+    const { data: sq } = await supabase.from('spicy_questions').select('*').eq('id', sid).maybeSingle();
+    const row = (sq ?? null) as Record<string, unknown> | null;
+    const text = row
+      ? (typeof row.question_text === 'string' && row.question_text.trim()) ||
+        (typeof row.question === 'string' && row.question.trim()) ||
+        (typeof row.prompt === 'string' && row.prompt.trim()) ||
+        ''
+      : '';
+    return { questionId: sid, selectedQuestion: row, questionText: typeof text === 'string' ? text : '' };
+  }
+
+  const { data: packQuestion } = await supabase
+    .from('pack_questions')
+    .select('*')
+    .eq('pack_id', packId)
+    .eq('day_number', day)
+    .maybeSingle();
+
+  if (packQuestion && (packQuestion as Record<string, unknown>).id != null) {
+    const pq = packQuestion as Record<string, unknown>;
+    const questionText =
+      (typeof pq.question_text === 'string' && pq.question_text.trim()) ||
+      (typeof pq.question === 'string' && pq.question.trim()) ||
+      (typeof pq.prompt === 'string' && pq.prompt.trim()) ||
+      '';
+    if (questionText) {
+      return { questionId: String(pq.id), selectedQuestion: pq, questionText };
+    }
+  }
+
+  const poolRow = await resolveTodayQuestionRow(now);
+  const id = poolRow?.id != null ? String(poolRow.id) : null;
+  const text = poolRow ? (readQuestionTextFromRow(poolRow) ?? '') : '';
+  return { questionId: id, selectedQuestion: poolRow, questionText: text };
+}
+
 function getGreetingPrefix(date: Date): string {
   const h = date.getHours();
   if (h >= 5 && h < 12) {
@@ -246,6 +388,104 @@ function getGreetingPrefix(date: Date): string {
     return 'Good evening';
   }
   return 'Hey';
+}
+
+const PARTNER_PHRASE_FALLBACK = 'your partner';
+const PARTNER_HEADING_FALLBACK = 'Your partner';
+const USER_GREETING_FALLBACK = 'friend';
+
+function profileDisplayNameFromRow(row: Record<string, unknown> | null | undefined): string {
+  if (!row) {
+    return '';
+  }
+  for (const key of ['name', 'first_name', 'full_name'] as const) {
+    const v = row[key];
+    if (typeof v === 'string' && v.trim()) {
+      return v.trim();
+    }
+  }
+  return '';
+}
+
+function isUnusableFirstNameToken(token: string): boolean {
+  const t = token.trim().toLowerCase();
+  if (!t) {
+    return true;
+  }
+  return new Set(['your', 'there', 'partner', 'hey', 'hi', 'dear', 'null', 'undefined']).has(t);
+}
+
+/** Lowercase mid-sentence, e.g. "Waiting for {name}'s answer" */
+function partnerPossessivePhraseName(row: Record<string, unknown> | null | undefined): string {
+  const full = profileDisplayNameFromRow(row);
+  const first = full.split(/\s+/).filter(Boolean)[0] ?? '';
+  if (isUnusableFirstNameToken(first)) {
+    return PARTNER_PHRASE_FALLBACK;
+  }
+  return first;
+}
+
+/** Title-style first name for headings ("Alex said:") or PARTNER_HEADING_FALLBACK */
+function partnerHeadingFirstName(row: Record<string, unknown> | null | undefined): string {
+  const p = partnerPossessivePhraseName(row);
+  return p === PARTNER_PHRASE_FALLBACK ? PARTNER_HEADING_FALLBACK : p;
+}
+
+function userGreetingFirstName(
+  profileRow: Record<string, unknown> | null | undefined,
+  authMetadata: Record<string, unknown> | undefined
+): string {
+  let full = profileDisplayNameFromRow(profileRow);
+  if (!full && authMetadata) {
+    const fromMeta =
+      typeof authMetadata.first_name === 'string'
+        ? authMetadata.first_name.trim()
+        : typeof authMetadata.name === 'string'
+          ? authMetadata.name.trim()
+          : '';
+    full = fromMeta;
+  }
+  const first = full.split(/\s+/).filter(Boolean)[0] ?? '';
+  if (isUnusableFirstNameToken(first)) {
+    return '';
+  }
+  return first;
+}
+
+async function fetchPartnerProfileRow(
+  coupleId: string,
+  currentUserId: string
+): Promise<Record<string, unknown> | null> {
+  console.log('[partnerName] querying partner profile', { coupleId, currentUserId });
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, name')
+    .eq('couple_id', coupleId)
+    .neq('id', currentUserId);
+
+  if (error) {
+    console.log('[partnerName] partner query error', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+      coupleId,
+      currentUserId,
+    });
+    return null;
+  }
+
+  if (!data || data.length === 0) {
+    console.log('[partnerName] no partner profile rows returned', { coupleId, currentUserId });
+    return null;
+  }
+
+  const rows = data as Record<string, unknown>[];
+  const named = rows.find((row) => {
+    const first = partnerHeadingFirstName(row);
+    return first !== PARTNER_HEADING_FALLBACK;
+  });
+  return named ?? rows[0] ?? null;
 }
 
 function formatTodayLong(date: Date): string {
@@ -401,7 +641,7 @@ function MarketingHomeScreen({
       <View style={styles.homeInner}>
         <View style={styles.homeTopSection}>
           <Image source={HOME_LOGO} style={styles.homeLogo} resizeMode="contain" />
-          <Text style={styles.tagline}>{"There's still a spark. Let's make it ours."}</Text>
+          <Text style={styles.tagline}>{"Keep the Spark"}</Text>
         </View>
         <View style={styles.homeBottomSection}>
           <HomeButton label="Begin Our Story" onPress={onBeginOurStory} />
@@ -881,7 +1121,7 @@ function OurSparkWrappedModal({
                 </Text>
                 <View style={[styles.wrappedDividerOrange, { backgroundColor: WRAPPED_CORAL }]} />
                 <Text style={[styles.wrappedCoverTag, { fontFamily: FONT_BODY, color: CREAM }]}>
-                  {"There's still a spark. Let's make it ours."}
+                  {"Keep the Spark"}
                 </Text>
                 <Text style={[styles.wrappedSwipeHint, { fontFamily: FONT_BODY, color: ORANGE }]}>
                   Swipe to begin
@@ -1132,20 +1372,25 @@ function OurSparkWrappedModal({
 function DashboardScreen({
   userId,
   onOpenSubscriptionPlans,
+  onNavigateToPartnerSetup,
 }: {
   userId: string;
   onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
+  onNavigateToPartnerSetup: () => void;
 }) {
+  console.log('[DashboardScreen] component rendering, userId:', userId);
   const navigation = useNavigation<BottomTabNavigationProp<any>>();
   const pulseOpacity = useRef(new Animated.Value(0.4)).current;
 
   const [firstName, setFirstName] = useState('');
+  const [partnerProfileRow, setPartnerProfileRow] = useState<Record<string, unknown> | null>(null);
   const [dateLine, setDateLine] = useState('');
   const [currentStreak, setCurrentStreak] = useState(0);
   const [compatibilityScore, setCompatibilityScore] = useState(0);
   const [vaultCount, setVaultCount] = useState(0);
-  const [todayStatus, setTodayStatus] = useState<DailyQuestionStatus>('not_answered');
+  const [todayStatus, setTodayStatus] = useState<DailyQuestionStatus | null>(null);
   const [coupleId, setCoupleId] = useState<string | null>(null);
+  const [showAddPartnerLink, setShowAddPartnerLink] = useState(true);
   const [reflection, setReflection] = React.useState<string | null>(null);
   const [isPro, setIsPro] = useState(false);
   const [showWrapped, setShowWrapped] = useState(false);
@@ -1201,9 +1446,12 @@ function DashboardScreen({
         .from('profiles')
         .select('couple_id')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
       console.log('Profile for reflection:', JSON.stringify(profile));
-      if (!profile?.couple_id) {
+      if (!profile) {
+        return;
+      }
+      if (!profile.couple_id) {
         console.log('No couple_id');
         return;
       }
@@ -1214,7 +1462,7 @@ function DashboardScreen({
         .eq('couple_id', profile.couple_id)
         .order('created_at', { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
 
       console.log('Reflection result:', JSON.stringify(data));
       console.log('Reflection error:', JSON.stringify(error));
@@ -1239,44 +1487,70 @@ function DashboardScreen({
   }, [pulseOpacity]);
 
   const fetchDashboardData = useCallback(async () => {
-    const { data: authData } = await supabase.auth.getUser();
-    const uid = authData.user?.id ?? userId;
+    try {
+    console.log('[fetchDashboard] function started, userId:', userId);
+    const uid = userId;
+    const now = new Date();
 
-    setDateLine(formatTodayLong(new Date()));
+    setDateLine(formatTodayLong(now));
 
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('couple_id, name')
       .eq('id', uid)
       .maybeSingle();
+    console.log('[fetchDashboard] profile query result:', JSON.stringify(profile), 'error:', JSON.stringify(profileError));
+    console.log('[fetchDashboard] profile done:', profile?.couple_id ?? 'no couple');
 
-    const userName =
-      typeof profile?.name === 'string' && profile.name.trim() ? profile.name.trim() : '';
-    setFirstName(userName);
+    const profileRecord = profile as Record<string, unknown> | null | undefined;
+    const greetingToken = userGreetingFirstName(profileRecord, undefined);
+    setFirstName(greetingToken || USER_GREETING_FALLBACK);
 
     const nextCoupleId = profile?.couple_id ? String(profile.couple_id) : null;
     setCoupleId(nextCoupleId);
+    console.log('[fetchDashboard] coupleId set:', nextCoupleId);
+    setPartnerProfileRow(null);
 
     if (!nextCoupleId) {
+      setShowAddPartnerLink(true);
       setCurrentStreak(0);
       setCompatibilityScore(0);
       setVaultCount(0);
-      setTodayStatus('not_answered');
       setReflection(null);
       setIsPro(false);
       setActivePackLine(null);
       return;
     }
 
+    const { count: coupleProfileCount, error: coupleProfileCountError } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true })
+      .eq('couple_id', nextCoupleId);
+    setShowAddPartnerLink(
+      coupleProfileCountError ? true : Math.max(0, coupleProfileCount ?? 0) < 2
+    );
+
+    const { data: partnerProfile } = await supabase
+      .from('profiles')
+      .select('name')
+      .eq('couple_id', nextCoupleId)
+      .neq('id', uid)
+      .limit(1)
+      .maybeSingle();
+    setPartnerProfileRow((partnerProfile as Record<string, unknown> | null) ?? null);
+
     setIsPro(await checkIsPro(nextCoupleId));
 
     const { data: couple } = await supabase
       .from('couples')
-      .select('current_streak, compatibility_score')
+      .select('current_streak, longest_streak, compatibility_score, last_answered_date, total_questions_answered')
       .eq('id', nextCoupleId)
       .maybeSingle();
 
-    setCurrentStreak(Number(couple?.current_streak ?? 0));
+    const streakVal = Math.max(0, Math.round(Number(couple?.current_streak ?? 0)));
+    console.log('[streak] setting currentStreak to:', streakVal);
+    setCurrentStreak(streakVal);
+
     setCompatibilityScore(Number(couple?.compatibility_score ?? 0));
 
     const { count: vaultCountResult, error: vaultError } = await supabase
@@ -1334,46 +1608,142 @@ function DashboardScreen({
       }
     }
 
-    const qRow = await resolveTodayQuestionRow();
-    const qId = qRow?.id != null ? String(qRow.id) : null;
-    if (!qId) {
-      setTodayStatus('not_answered');
-    } else {
-      const rows = await fetchTodayAnswersRows(nextCoupleId, qId);
-      const mine = rows.find((r) => String(r.user_id ?? '') === uid);
-      const partner = rows.find((r) => String(r.user_id ?? '') !== uid);
-
-      if (mine && partner) {
-        setTodayStatus('reveal_ready');
-      } else if (mine) {
-        setTodayStatus('waiting');
-      } else {
-        setTodayStatus('not_answered');
-      }
-    }
-
     const coupleId = nextCoupleId;
 
     // Fetch weekly reflection
-    console.log('Fetching reflection inside main fetch, couple_id:', coupleId);
-    const { data: reflectionData, error: reflectionError } = await supabase
-      .from('reflections')
-      .select('reflection_text')
-      .eq('couple_id', coupleId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-    console.log('Reflection data:', JSON.stringify(reflectionData));
-    console.log('Reflection error:', JSON.stringify(reflectionError));
-    if (reflectionData) {
-      setReflection(reflectionData.reflection_text);
+    try {
+      console.log('Fetching reflection inside main fetch, couple_id:', coupleId);
+      const { data: reflectionData } = await supabase
+        .from('reflections')
+        .select('reflection_text')
+        .eq('couple_id', coupleId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (reflectionData?.reflection_text) {
+        setReflection(reflectionData.reflection_text);
+      }
+    } catch {
+      // ignore reflection fetch failures
     }
+
+    console.log('[dashboardStatus] starting check, coupleId:', nextCoupleId, 'uid:', uid);
+    const { questionId: qId } = await resolveTodaysQuestionForCoupleAnswers(nextCoupleId, uid, { now });
+    console.log('[dashboardStatus] questionId:', qId);
+    console.log('[dashboardStatus] coupleId:', nextCoupleId);
+    if (!qId) {
+      console.log('[dashboardStatus] setting state:', 'not_answered');
+      setTodayStatus('not_answered');
+    } else {
+      const { data: answerRows } = await supabase
+        .from('answers')
+        .select('user_id')
+        .eq('couple_id', nextCoupleId)
+        .eq('question_id', qId);
+      console.log('[dashboardStatus] answers query raw:', JSON.stringify(answerRows));
+      const rows = (answerRows ?? []) as Record<string, unknown>[];
+      if (rows.length === 0) {
+        console.log('[dashboardStatus] setting state:', 'not_answered');
+        setTodayStatus('not_answered');
+      } else if (rows.length >= 2) {
+        console.log('[dashboardStatus] setting state:', 'reveal_ready');
+        setTodayStatus('reveal_ready');
+      } else {
+        const only = rows[0];
+        const belongsToMe = String(only?.user_id ?? '') === uid;
+        const nextState: DailyQuestionStatus = belongsToMe ? 'waiting' : 'not_answered';
+        console.log('[dashboardStatus] setting state:', nextState);
+        setTodayStatus(nextState);
+      }
+    }
+  } catch (error) {
+    console.log('[dashboardData] error caught:', error);
+  }
   }, [userId]);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(DASHBOARD_COUPLE_STATS_REFRESH, () => {
+      void fetchDashboardData();
+    });
+    return () => sub.remove();
+  }, [fetchDashboardData]);
 
   useFocusEffect(
     useCallback(() => {
       fetchDashboardData();
     }, [fetchDashboardData])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      void (async () => {
+        try {
+          const cached = await AsyncStorage.getItem('cached_today_status');
+          if (cached === 'not_answered' || cached === 'waiting' || cached === 'reveal_ready') {
+            setTodayStatus(cached);
+          }
+
+          const { data: authData } = await supabase.auth.getUser();
+          const uid = authData.user?.id ?? userId;
+          console.log('[statusCheck] start', { uid });
+
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('couple_id')
+            .eq('id', uid)
+            .maybeSingle();
+          const coupleId = profile?.couple_id != null ? String(profile.couple_id) : null;
+
+          if (!coupleId) {
+            setTodayStatus(null);
+            console.log('[statusCheck] result:', null);
+            return;
+          }
+
+          const { data: partnerProfile } = await supabase
+            .from('profiles')
+            .select('name')
+            .eq('couple_id', coupleId)
+            .neq('id', uid)
+            .limit(1)
+            .maybeSingle();
+          setPartnerProfileRow((partnerProfile as Record<string, unknown> | null) ?? null);
+
+          const { questionId: qId } = await resolveTodaysQuestionForCoupleAnswers(coupleId, uid, {
+            now: new Date(),
+          });
+
+          if (!qId) {
+            setTodayStatus(null);
+            console.log('[statusCheck] result:', null);
+            return;
+          }
+
+          const { data: answerRows } = await supabase
+            .from('answers')
+            .select('user_id')
+            .eq('couple_id', coupleId)
+            .eq('question_id', qId);
+
+          const rows = (answerRows ?? []) as Record<string, unknown>[];
+          let status: DailyQuestionStatus = 'not_answered';
+          if (rows.length === 0) {
+            status = 'not_answered';
+          } else if (rows.length >= 2) {
+            status = 'reveal_ready';
+          } else {
+            const belongsToMe = String(rows[0]?.user_id ?? '') === uid;
+            status = belongsToMe ? 'waiting' : 'not_answered';
+          }
+
+          setTodayStatus(status);
+          await AsyncStorage.setItem('cached_today_status', status);
+          console.log('[statusCheck] result:', status);
+        } catch {
+          // ignore status check failures
+        }
+      })();
+    }, [userId])
   );
 
   useFocusEffect(
@@ -1393,7 +1763,132 @@ function DashboardScreen({
     navigation.navigate('Question');
   };
 
-  const greeting = `${getGreetingPrefix(new Date())}, ${firstName || 'there'}`;
+  const handleDeleteAccount = useCallback(() => {
+    Alert.alert(
+      'Delete your account?',
+      'This will permanently delete your account and all your OurSpark moments. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete permanently',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                const { data: profileRow, error: profileReadError } = await supabase
+                  .from('profiles')
+                  .select('couple_id')
+                  .eq('id', userId)
+                  .maybeSingle();
+                if (profileReadError) {
+                  throw profileReadError;
+                }
+                const userCoupleId =
+                  profileRow?.couple_id != null ? String(profileRow.couple_id) : null;
+
+                const { error: answersUserError } = await supabase.from('answers').delete().eq('user_id', userId);
+                if (answersUserError) {
+                  throw answersUserError;
+                }
+
+                if (userCoupleId) {
+                  const { error: vaultError } = await supabase.from('vault').delete().eq('couple_id', userCoupleId);
+                  if (vaultError) {
+                    throw vaultError;
+                  }
+
+                  const { error: coupleBadgesError } = await supabase
+                    .from('couple_badges')
+                    .delete()
+                    .eq('couple_id', userCoupleId);
+                  if (coupleBadgesError) {
+                    throw coupleBadgesError;
+                  }
+
+                  const { error: couplePacksError } = await supabase
+                    .from('couple_packs')
+                    .delete()
+                    .eq('couple_id', userCoupleId);
+                  if (couplePacksError) {
+                    throw couplePacksError;
+                  }
+
+                  const { error: spicyPicksError } = await supabase
+                    .from('spicy_level_picks')
+                    .delete()
+                    .eq('user_id', userId);
+                  if (spicyPicksError) {
+                    throw spicyPicksError;
+                  }
+
+                  const { error: spicyUsedError } = await supabase
+                    .from('spicy_questions_used')
+                    .delete()
+                    .eq('couple_id', userCoupleId);
+                  if (spicyUsedError) {
+                    throw spicyUsedError;
+                  }
+
+                  const { error: wrappedError } = await supabase.from('wrapped').delete().eq('couple_id', userCoupleId);
+                  if (wrappedError) {
+                    throw wrappedError;
+                  }
+
+                  const { error: answersCoupleError } = await supabase
+                    .from('answers')
+                    .delete()
+                    .eq('couple_id', userCoupleId);
+                  if (answersCoupleError) {
+                    throw answersCoupleError;
+                  }
+
+                  const { error: clearCoupleOnProfilesError } = await supabase
+                    .from('profiles')
+                    .update({ couple_id: null })
+                    .eq('couple_id', userCoupleId);
+                  if (clearCoupleOnProfilesError) {
+                    throw clearCoupleOnProfilesError;
+                  }
+
+                  const { error: couplesError } = await supabase.from('couples').delete().eq('id', userCoupleId);
+                  if (couplesError) {
+                    throw couplesError;
+                  }
+                } else {
+                  const { error: spicyPicksSoloError } = await supabase
+                    .from('spicy_level_picks')
+                    .delete()
+                    .eq('user_id', userId);
+                  if (spicyPicksSoloError) {
+                    throw spicyPicksSoloError;
+                  }
+                }
+
+                const { error: profileError } = await supabase.from('profiles').delete().eq('id', userId);
+                if (profileError) {
+                  throw profileError;
+                }
+
+                const { error: signOutError } = await supabase.auth.signOut();
+                if (signOutError) {
+                  throw signOutError;
+                }
+                await AsyncStorage.removeItem('cached_today_status');
+              } catch {
+                Alert.alert('Something went wrong. Please contact support@oursparkapp.com');
+              }
+            })();
+          },
+        },
+      ]
+    );
+  }, [userId]);
+
+  const greeting = `${getGreetingPrefix(new Date())}, ${firstName || USER_GREETING_FALLBACK}`;
+  const dashboardPartnerWaitingPhrase = useMemo(
+    () => partnerPossessivePhraseName(partnerProfileRow),
+    [partnerProfileRow]
+  );
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -1406,49 +1901,57 @@ function DashboardScreen({
         <Text style={styles.dbGreeting}>{greeting}</Text>
         <Text style={styles.dbDateLine}>{dateLine}</Text>
 
-        <View
-          style={[
-            styles.dbTodayCard,
-            todayStatus === 'reveal_ready' ? styles.dbTodayCardGlow : null,
-          ]}
-        >
-          <Text style={styles.dbStatusSmall}>{"TODAY'S QUESTION"}</Text>
-          {todayStatus === 'not_answered' ? (
-            <>
-              <View style={styles.dbTitleIconRow}>
-                <Ionicons name="chatbubble-outline" size={20} color={CREAM} />
-                <Text style={styles.dbTodayTitle}>Your question is waiting...</Text>
+        {todayStatus !== null ? (
+          <View
+            style={[
+              styles.dbTodayCard,
+              todayStatus === 'reveal_ready' ? styles.dbTodayCardGlow : null,
+            ]}
+          >
+            <Text style={styles.dbStatusSmall}>{"TODAY'S QUESTION"}</Text>
+            {todayStatus === 'not_answered' ? (
+              <>
+                <View style={styles.dbTitleIconRow}>
+                  <Ionicons name="chatbubble-outline" size={20} color={CREAM} />
+                  <Text style={styles.dbTodayTitle}>Your question is waiting</Text>
+                </View>
+                <TouchableOpacity
+                  activeOpacity={0.92}
+                  style={styles.dbAnswerNowBtn}
+                  onPress={goToToday}
+                >
+                  <Text style={styles.dbAnswerNowText}>Answer Now</Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+            {todayStatus === 'waiting' ? (
+              <>
+                <Text style={styles.dbWaitingSub}>
+                  Waiting for {dashboardPartnerWaitingPhrase}&apos;s answer...
+                </Text>
+                <View style={styles.dbPulseRow}>
+                  <Animated.View style={[styles.dbPulseDot, { opacity: pulseOpacity }]} />
+                </View>
+              </>
+            ) : null}
+            {todayStatus === 'reveal_ready' ? (
+              <View style={styles.dbRevealReadyWrap}>
+                <View style={styles.dbTitleIconRow}>
+                  <Ionicons name="sparkles-outline" size={24} color={ORANGE} />
+                  <Text style={styles.dbTodayTitleReveal}>Your reveal is ready!</Text>
+                </View>
+                <TouchableOpacity
+                  activeOpacity={0.92}
+                  style={styles.dbSeeRevealBtn}
+                  onPress={goToToday}
+                >
+                  <Text style={styles.dbSeeRevealText}>See The Reveal</Text>
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity activeOpacity={0.92} style={styles.dbAnswerNowBtn} onPress={goToToday}>
-                <Text style={styles.dbAnswerNowText}>Answer Now</Text>
-              </TouchableOpacity>
-            </>
-          ) : null}
-          {todayStatus === 'waiting' ? (
-            <>
-              <View style={styles.dbTitleIconRowTight}>
-                <Ionicons name="lock-closed-outline" size={20} color={ORANGE} />
-                <Text style={styles.dbTodayTitleLocked}>Answer locked in!</Text>
-              </View>
-              <Text style={styles.dbWaitingSub}>Waiting for your partner...</Text>
-              <View style={styles.dbPulseRow}>
-                <Animated.View style={[styles.dbPulseDot, { opacity: pulseOpacity }]} />
-              </View>
-            </>
-          ) : null}
-          {todayStatus === 'reveal_ready' ? (
-            <View style={styles.dbRevealReadyWrap}>
-              <View style={styles.dbTitleIconRow}>
-                <Ionicons name="sparkles-outline" size={24} color={ORANGE} />
-                <Text style={styles.dbTodayTitleReveal}>Your reveal is ready!</Text>
-              </View>
-              <TouchableOpacity activeOpacity={0.92} style={styles.dbSeeRevealBtn} onPress={goToToday}>
-                <Text style={styles.dbSeeRevealText}>See The Reveal</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-          {activePackLine ? <Text style={styles.dbActivePackLine}>{activePackLine}</Text> : null}
-        </View>
+            ) : null}
+            {activePackLine ? <Text style={styles.dbActivePackLine}>{activePackLine}</Text> : null}
+          </View>
+        ) : null}
 
         <View style={styles.dbStreakRow}>
           <View style={styles.dbHalfCard}>
@@ -1513,7 +2016,7 @@ function DashboardScreen({
           </View>
         ) : null}
 
-        <TouchableOpacity activeOpacity={0.9} style={styles.dbVaultCard} onPress={() => {}}>
+        <TouchableOpacity activeOpacity={0.9} style={styles.dbVaultCard} onPress={() => navigation.navigate('Vault')}>
           <View style={styles.dbVaultTitleRow}>
             <Ionicons name="heart-outline" size={22} color={CREAM} />
             <Text style={styles.dbVaultTitle}>Your Spark Vault</Text>
@@ -1540,9 +2043,31 @@ function DashboardScreen({
           </TouchableOpacity>
         ) : null}
 
-        <TouchableOpacity activeOpacity={0.85} style={styles.dbWrappedPreviewBtn} onPress={() => void openWrapped()}>
-          <Text style={styles.dbWrappedPreviewText}>Preview Wrapped</Text>
-        </TouchableOpacity>
+        {showAddPartnerLink ? (
+          <TouchableOpacity activeOpacity={0.85} style={styles.dbAddPartnerLinkWrap} onPress={onNavigateToPartnerSetup}>
+            <Text style={styles.dbAddPartnerLinkText}>Add your partner</Text>
+          </TouchableOpacity>
+        ) : null}
+
+        <View style={styles.dbAccountLinksRow}>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            style={styles.dbSignOutLinkWrap}
+            onPress={() => {
+              void (async () => {
+                await AsyncStorage.removeItem('cached_today_status');
+                await supabase.auth.signOut();
+              })();
+            }}
+          >
+            <Text style={styles.dbSignOutLinkText}>Sign out</Text>
+          </TouchableOpacity>
+          <Text style={styles.dbAccountLinkSeparator}> | </Text>
+          <TouchableOpacity activeOpacity={0.8} style={styles.dbDeleteAccountLinkWrap} onPress={handleDeleteAccount}>
+            <Text style={styles.dbDeleteAccountLinkText}>Delete account</Text>
+          </TouchableOpacity>
+        </View>
+
       </ScrollView>
 
       <OurSparkWrappedModal
@@ -1594,7 +2119,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   const [vaultSaveBanner, setVaultSaveBanner] = useState(false);
   const vaultSaveBannerTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dailyLoadReady, setDailyLoadReady] = useState(false);
-  const [partnerName, setPartnerName] = useState<string>('Your partner');
+  const [partnerName, setPartnerName] = useState<string>(PARTNER_HEADING_FALLBACK);
   const partnerNameRef = useRef(partnerName);
   const [showMilestoneModal, setShowMilestoneModal] = useState(false);
   const [showPerfectSyncModal, setShowPerfectSyncModal] = useState(false);
@@ -1708,13 +2233,6 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
     [myAnswer, partnerAnswer]
   );
 
-  const formatLocalDateKey = (date: Date): string => {
-    const year = date.getFullYear();
-    const month = `${date.getMonth() + 1}`.padStart(2, '0');
-    const day = `${date.getDate()}`.padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-
   const readAnswerText = (answerRow: Record<string, unknown>): string => {
     const candidates = [
       answerRow.answer_text,
@@ -1731,17 +2249,24 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
     return '';
   };
 
-  const updateCoupleStatsAfterReveal = async (myText: string, theirText: string) => {
-    if (!coupleId) {
+  const updateCoupleStatsAfterReveal = async (
+    myText: string,
+    theirText: string,
+    statsCoupleId?: string | null,
+    statsQuestionId?: string | null
+  ) => {
+    const coupleIdForStats = statsCoupleId ?? coupleId;
+    if (!coupleIdForStats) {
       return;
     }
+    const questionIdForStats = statsQuestionId ?? questionId;
 
     const { data: couple, error } = await supabase
       .from('couples')
       .select(
         'current_streak,longest_streak,last_answered_date,total_questions_answered,total_matches,compatibility_score'
       )
-      .eq('id', coupleId)
+      .eq('id', coupleIdForStats)
       .maybeSingle();
 
     if (error || !couple) {
@@ -1749,7 +2274,8 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
     }
 
     const todayKey = formatLocalDateKey(new Date());
-    if (String(couple.last_answered_date ?? '') === todayKey) {
+    const lastAnsweredKey = coupleDateKeyFromDbValue(couple.last_answered_date);
+    if (lastAnsweredKey === todayKey) {
       return;
     }
 
@@ -1758,7 +2284,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
     const yesterdayKey = formatLocalDateKey(yesterday);
 
     const priorStreak = Number(couple.current_streak ?? 0);
-    const nextStreak = String(couple.last_answered_date ?? '') === yesterdayKey ? priorStreak + 1 : 1;
+    const nextStreak = lastAnsweredKey === yesterdayKey ? priorStreak + 1 : 1;
     const nextLongestStreak = Math.max(Number(couple.longest_streak ?? 0), nextStreak);
     const nextTotalAnswered = Number(couple.total_questions_answered ?? 0) + 1;
 
@@ -1778,17 +2304,19 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
         total_matches: nextTotalMatches,
         compatibility_score: nextCompatibility,
       })
-      .eq('id', coupleId);
+      .eq('id', coupleIdForStats);
 
     if (updateError) {
       return;
     }
 
-    if (questionId) {
+    DeviceEventEmitter.emit(DASHBOARD_COUPLE_STATS_REFRESH);
+
+    if (questionIdForStats) {
       void checkAndAwardBadges({
-        coupleId,
+        coupleId: coupleIdForStats,
         userId,
-        questionId,
+        questionId: questionIdForStats,
         myText,
         theirText,
         isPerfectSync: getAnswerMatchMeta(myText, theirText).tier === 'perfect',
@@ -1914,78 +2442,8 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   };
 
   useEffect(() => {
-    const getDayOfYear = (date: Date): number => {
-      const start = new Date(date.getFullYear(), 0, 0);
-      const diff = date.getTime() - start.getTime();
-      return Math.floor(diff / 86400000);
-    };
-
-    const readQuestionText = (questionRow: Record<string, unknown>): string | null => {
-      const candidates = [
-        questionRow.question,
-        questionRow.question_text,
-        questionRow.text,
-        questionRow.prompt,
-        questionRow.title,
-      ];
-
-      for (const value of candidates) {
-        if (typeof value === 'string' && value.trim().length > 0) {
-          return value.trim();
-        }
-      }
-      return null;
-    };
-
-    const selectTodaysQuestion = async (): Promise<Record<string, unknown> | null> => {
-      const today = new Date();
-
-      const { data: allQuestions, error: allQuestionsError } = await supabase
-        .from('questions')
-        .select('*');
-
-      if (allQuestionsError || !allQuestions || allQuestions.length === 0) {
-        return null;
-      }
-
-      const scheduledMatch = allQuestions.find((row) => {
-        const rowMap = row as Record<string, unknown>;
-        if (rowMap.scheduled_date == null) {
-          return false;
-        }
-        if (!scheduledDateMatchesTodayMonthDay(rowMap.scheduled_date, today)) {
-          return false;
-        }
-        return Boolean(readQuestionText(rowMap));
-      });
-
-      if (scheduledMatch) {
-        const scheduledText = readQuestionText(scheduledMatch as Record<string, unknown>);
-        if (scheduledText) {
-          setDailyQuestion(scheduledText);
-          return scheduledMatch as Record<string, unknown>;
-        }
-      }
-
-      const validQuestions = allQuestions
-        .map((row) => {
-          const rowMap = row as Record<string, unknown>;
-          return { row: rowMap, text: readQuestionText(rowMap) };
-        })
-        .filter((item): item is { row: Record<string, unknown>; text: string } => Boolean(item.text));
-
-      if (validQuestions.length === 0) {
-        return null;
-      }
-
-      const dayOfYear = getDayOfYear(today);
-      const totalQuestions = validQuestions.length;
-      const questionIndex = Math.abs(dayOfYear % totalQuestions);
-      setDailyQuestion(validQuestions[questionIndex].text);
-      return validQuestions[questionIndex].row;
-    };
-
     const loadQuestion = async () => {
+      console.log('loadQuestion called with userId:', userId);
       setDailyLoadReady(false);
       setCoupleId(null);
       setQuestionId(null);
@@ -1995,6 +2453,8 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       setSpicyMyLevel(null);
       setSpicyPartnerLevel(null);
 
+      const now = new Date();
+
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('couple_id, name')
@@ -2002,7 +2462,6 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
         .single();
 
       if (profileError || !profile) {
-        console.log('Profile loaded:', JSON.stringify(profile ?? null));
         setDailyLoadReady(true);
         return;
       }
@@ -2023,10 +2482,11 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
         .select('*, packs(*)')
         .eq('couple_id', cid)
         .eq('status', 'active')
-        .single();
+        .maybeSingle();
       console.log('Active pack:', JSON.stringify(activePackData));
 
       let selectedQuestion: Record<string, unknown> | null = null;
+      let resolvedQuestionId: string | null = null;
       if (activePackData) {
         const ap = activePackData as Record<string, unknown>;
         const packId = ap.pack_id != null ? String(ap.pack_id) : '';
@@ -2050,7 +2510,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
           });
 
           if (packName === 'Spicy Pack') {
-            const todayKey = formatLocalDateKey(new Date());
+            const todayKey = formatLocalDateKey(now);
             const { data: levelPicks } = await supabase
               .from('spicy_level_picks')
               .select('user_id, level')
@@ -2076,75 +2536,66 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
               setDailyLoadReady(true);
               return;
             }
-            setSpicyStage(2);
-            setDailyLoadReady(true);
-            return;
+            const spicyResolution = await resolveTodaysQuestionForCoupleAnswers(cid, userId, {
+              activePackData: activePackData as Record<string, unknown>,
+              now,
+            });
+            selectedQuestion = spicyResolution.selectedQuestion;
+            resolvedQuestionId = spicyResolution.questionId;
+            if (spicyResolution.questionText) {
+              setDailyQuestion(spicyResolution.questionText);
+            }
+            if (!resolvedQuestionId) {
+              setSpicyStage(2);
+              setDailyLoadReady(true);
+              return;
+            }
+            setSpicyStage(3);
           }
         } else {
           setActivePack(null);
         }
 
-        const { data: packQuestion } = await supabase
-          .from('pack_questions')
-          .select('*')
-          .eq('pack_id', packId)
-          .eq('day_number', day)
-          .single();
-
-        if (packQuestion) {
-          const pq = packQuestion as Record<string, unknown>;
-          const questionText =
-            (typeof pq.question_text === 'string' && pq.question_text.trim()) ||
-            (typeof pq.question === 'string' && pq.question.trim()) ||
-            (typeof pq.prompt === 'string' && pq.prompt.trim()) ||
-            '';
-          if (questionText) {
-            setDailyQuestion(questionText);
-            selectedQuestion = pq;
-          }
+        const resolution = await resolveTodaysQuestionForCoupleAnswers(cid, userId, {
+          activePackData: activePackData as Record<string, unknown>,
+          now,
+        });
+        selectedQuestion = resolution.selectedQuestion;
+        resolvedQuestionId = resolution.questionId;
+        if (resolution.questionText) {
+          setDailyQuestion(resolution.questionText);
+        }
+      } else {
+        const resolution = await resolveTodaysQuestionForCoupleAnswers(cid, userId, {
+          activePackData: null,
+          now,
+        });
+        selectedQuestion = resolution.selectedQuestion;
+        resolvedQuestionId = resolution.questionId;
+        if (resolution.questionText) {
+          setDailyQuestion(resolution.questionText);
         }
       }
 
-      if (!selectedQuestion) {
-        selectedQuestion = await selectTodaysQuestion();
-      }
       console.log('Question loaded:', JSON.stringify(selectedQuestion));
 
-      const selectedQuestionId = selectedQuestion?.id;
-      if (!selectedQuestionId) {
+      if (!resolvedQuestionId) {
         setQuestionId(null);
         setDailyLoadReady(true);
         return;
       }
 
-      const normalizedQuestionId = String(selectedQuestionId);
+      const normalizedQuestionId = String(resolvedQuestionId);
       const normalizedCoupleId = cid;
       setQuestionId(normalizedQuestionId);
 
-      const { startIso, endIso } = getLocalDayBounds();
-
-      const fetchMineToday = async (column: 'submitted_at' | 'created_at') => {
-        const { data, error } = await supabase
-          .from('answers')
-          .select('*')
-          .eq('user_id', userId)
-          .eq('question_id', normalizedQuestionId)
-          .eq('couple_id', normalizedCoupleId)
-          .gte(column, startIso)
-          .lt(column, endIso)
-          .order('created_at', { ascending: false })
-          .limit(1);
-        if (error) {
-          return null;
-        }
-        const row = data?.[0] as Record<string, unknown> | undefined;
-        return row ?? null;
-      };
-
-      let mineRow = await fetchMineToday('submitted_at');
-      if (!mineRow) {
-        mineRow = await fetchMineToday('created_at');
-      }
+      const { data: myAnswerRows } = await supabase
+        .from('answers')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('question_id', normalizedQuestionId)
+        .limit(1);
+      const mineRow = (myAnswerRows?.[0] ?? null) as Record<string, unknown> | null;
 
       if (!mineRow) {
         setMyAnswer('');
@@ -2156,33 +2607,24 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
 
       setMyAnswer(readAnswerText(mineRow));
 
-      const fetchPartnerToday = async (column: 'submitted_at' | 'created_at') => {
-        const { data, error } = await supabase
-          .from('answers')
-          .select('*')
-          .eq('couple_id', normalizedCoupleId)
-          .eq('question_id', normalizedQuestionId)
-          .neq('user_id', userId)
-          .gte(column, startIso)
-          .lt(column, endIso)
-          .order('created_at', { ascending: false })
-          .limit(1);
-        if (error) {
-          return null;
-        }
-        const row = data?.[0] as Record<string, unknown> | undefined;
-        return row ?? null;
-      };
-
-      let partnerRow = await fetchPartnerToday('submitted_at');
-      if (!partnerRow) {
-        partnerRow = await fetchPartnerToday('created_at');
-      }
+      const { data: partnerAnswerRows } = await supabase
+        .from('answers')
+        .select('*')
+        .eq('couple_id', normalizedCoupleId)
+        .eq('question_id', normalizedQuestionId)
+        .neq('user_id', userId)
+        .limit(1);
+      const partnerRow = (partnerAnswerRows?.[0] ?? null) as Record<string, unknown> | null;
 
       if (partnerRow) {
         setPartnerAnswer(readAnswerText(partnerRow));
         setDailyState('reveal');
-        await updateCoupleStatsAfterReveal(readAnswerText(mineRow), readAnswerText(partnerRow));
+        await updateCoupleStatsAfterReveal(
+          readAnswerText(mineRow),
+          readAnswerText(partnerRow),
+          normalizedCoupleId,
+          normalizedQuestionId
+        );
       } else {
         setPartnerAnswer('');
         setDailyState('waiting');
@@ -2196,39 +2638,33 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
 
   useEffect(() => {
     if (!coupleId || !userId) {
-      setPartnerName('Your partner');
+      console.log('[partnerName] skipping fetch until coupleId is loaded', { coupleId, userId });
+      setPartnerName(PARTNER_HEADING_FALLBACK);
       return;
     }
 
     let cancelled = false;
 
     void (async () => {
-      const { data: partnerProfile, error } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .select('name')
         .eq('couple_id', coupleId)
         .neq('id', userId)
-        .single();
+        .maybeSingle();
 
       if (cancelled) {
         return;
       }
-
-      if (error) {
-        const fallback = 'Your partner';
-        console.log('Partner name:', fallback);
-        setPartnerName(fallback);
-        return;
-      }
-
-      const nextPartnerName = partnerProfile?.name || 'Your partner';
-      const resolved =
-        typeof nextPartnerName === 'string' && nextPartnerName.trim().length > 0
-          ? nextPartnerName.trim()
-          : 'Your partner';
-
-      console.log('Partner name:', resolved);
-      setPartnerName(resolved);
+      const resolvedPartnerName =
+        !error && typeof data?.name === 'string' && data.name.trim().length > 0
+          ? data.name.trim()
+          : 'your partner';
+      setPartnerName(resolvedPartnerName);
+      console.log('[partnerName] resolved partnerName', {
+        partnerName: resolvedPartnerName,
+        hasPartnerRow: Boolean(data),
+      });
     })();
 
     return () => {
@@ -2236,9 +2672,17 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
     };
   }, [coupleId, userId]);
 
+  const waitingPartnerName = useMemo(() => {
+    const trimmed = partnerName.trim();
+    if (!trimmed || trimmed.toLowerCase() === PARTNER_HEADING_FALLBACK.toLowerCase()) {
+      return PARTNER_PHRASE_FALLBACK;
+    }
+    return trimmed;
+  }, [partnerName]);
+
   const waitingMessage = useMemo(
-    () => `Waiting for ${partnerName}'s answer...`,
-    [partnerName]
+    () => `Waiting for ${waitingPartnerName}'s answer...`,
+    [waitingPartnerName]
   );
 
   const needsAccountSetup = useMemo(
@@ -2354,16 +2798,14 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
   }, [coupleId, dailyState, questionId, userId]);
 
   const submitAnswer = async () => {
-    const answerText = answer;
+    const answerText = answer.trim();
     const currentQuestion = questionId ? { id: questionId } : null;
 
     console.log('Submit answer tapped');
     console.log('Answer text:', answerText);
-    console.log('Question ID:', currentQuestion?.id);
-    console.log('Couple ID:', coupleId);
     console.log('User ID:', userId);
 
-    if (!coupleId || !questionId || !answer.trim()) {
+    if (!coupleId || !questionId || !answerText) {
       return;
     }
 
@@ -2373,12 +2815,14 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       couple_id: coupleId,
       question_id: questionId,
       user_id: userId,
-      answer_text: answer.trim(),
+      answer_text: answerText,
       submitted_at: new Date().toISOString(),
     };
 
-    const { data, error } = await supabase.from('answers').insert(payload);
-    console.log('Insert result:', JSON.stringify(data), JSON.stringify(error));
+    const { error } = await supabase
+      .from('answers')
+      .upsert(payload, { onConflict: 'user_id,question_id' });
+    console.log('Upsert result error:', JSON.stringify(error));
     setIsSubmitting(false);
 
     if (error) {
@@ -2407,7 +2851,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       }
     }
 
-    setMyAnswer(answer.trim());
+    setMyAnswer(answerText);
     setDailyState('waiting');
   };
 
@@ -2525,6 +2969,29 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       saved_at: new Date().toISOString(),
     });
     if (!error) {
+      const { data: firstSparkBadge } = await supabase
+        .from('badges')
+        .select('id')
+        .eq('name', 'First Spark')
+        .maybeSingle();
+
+      if (firstSparkBadge?.id) {
+        const { data: existingFirstSpark } = await supabase
+          .from('couple_badges')
+          .select('id')
+          .eq('couple_id', coupleId)
+          .eq('badge_id', firstSparkBadge.id)
+          .maybeSingle();
+
+        if (!existingFirstSpark) {
+          await supabase.from('couple_badges').insert({
+            couple_id: coupleId,
+            badge_id: firstSparkBadge.id,
+            earned_at: new Date().toISOString(),
+          });
+        }
+      }
+
       void awardVaultKeeperIfFirstSave(coupleId, enqueueBadgeToast);
       if (vaultSaveBannerTimeoutRef.current) {
         clearTimeout(vaultSaveBannerTimeoutRef.current);
@@ -2604,7 +3071,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
 
           {isSpicyPackActive && spicyStage === 1 ? (
             <View style={styles.spicyWaitWrap}>
-              <Text style={styles.spicyWaitTitle}>Waiting for {partnerName} to pick their level...</Text>
+              <Text style={styles.spicyWaitTitle}>Waiting for {waitingPartnerName} to pick their level...</Text>
               <View style={styles.spicyWaitDotWrap}>
                 <Animated.View style={[styles.spicyWaitDot, { opacity: pulseOpacity }]} />
               </View>
@@ -2667,7 +3134,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
             <>
               <TextInput
                 style={styles.answerInput}
-                placeholder="Type your answer here... be honest"
+                placeholder="Type your answer here... dig deep"
                 placeholderTextColor={`${CREAM}99`}
                 value={answer}
                 onChangeText={setAnswer}
@@ -2702,9 +3169,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
                 <Text style={styles.revealBodyText}>{myAnswer}</Text>
               </View>
               <View style={styles.revealCard}>
-                <Text style={styles.revealPartnerLabel}>
-                  {partnerName ? `${partnerName} said:` : 'They said:'}
-                </Text>
+                <Text style={styles.revealPartnerLabel}>{`${partnerName} said:`}</Text>
                 <Text style={styles.revealBodyText}>{partnerAnswer}</Text>
               </View>
 
@@ -2748,7 +3213,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
                 <Text style={styles.perfectSyncDate}>{todayLabel}</Text>
                 <View style={styles.shareCardDivider} />
                 <Text style={styles.shareCardTagline}>
-                  {"There's still a spark. Let's make it ours."}
+                  {"Keep the Spark"}
                 </Text>
                 <Text style={styles.shareCardDomain}>oursparkapp.com</Text>
               </View>
@@ -2796,7 +3261,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
               ) : null}
               <View style={styles.shareCardDivider} />
               <Text style={styles.shareCardTagline}>
-                {"There's still a spark. Let's make it ours."}
+                {"Keep the Spark"}
               </Text>
               <Text style={styles.shareCardDomain}>oursparkapp.com</Text>
             </ViewShot>
@@ -2909,12 +3374,72 @@ async function attachUserToCouple(userId: string, coupleId: string): Promise<{ e
   return { error: null };
 }
 
-function InviteCodeScreen({ userId, onComplete }: { userId: string; onComplete: () => void }) {
+function InviteStageTabBar({
+  onPressTab,
+}: {
+  onPressTab: (name: keyof MainTabParamList) => void;
+}) {
+  const insets = useSafeAreaInsets();
+  const tabs: {
+    name: keyof MainTabParamList;
+    label: string;
+    icon: React.ComponentProps<typeof Ionicons>['name'];
+  }[] = [
+    { name: 'Dashboard', label: 'Dashboard', icon: 'grid-outline' },
+    { name: 'Question', label: 'Today', icon: 'sunny-outline' },
+    { name: 'Packs', label: 'Packs', icon: 'cube-outline' },
+    { name: 'Vault', label: 'Vault', icon: 'heart-outline' },
+    { name: 'Badges', label: 'Badges', icon: 'ribbon-outline' },
+  ];
+
+  return (
+    <View
+      style={[
+        styles.inviteStageTabBarRoot,
+        { paddingBottom: Math.max(insets.bottom, 8) },
+      ]}
+    >
+      {tabs.map(({ name, label, icon }) => (
+        <TouchableOpacity
+          key={name}
+          style={styles.inviteStageTabItem}
+          activeOpacity={0.7}
+          onPress={() => onPressTab(name)}
+        >
+          <Ionicons name={icon} size={24} color={`${CREAM}99`} />
+          <Text style={styles.inviteStageTabLabel}>{label}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+
+function InviteCodeScreen({
+  userId,
+  suppressCoupledAutoRedirect,
+  onComplete,
+  onNavigateToMainTab,
+}: {
+  userId: string;
+  suppressCoupledAutoRedirect: boolean;
+  onComplete: () => void;
+  onNavigateToMainTab: (name: keyof MainTabParamList) => void;
+}) {
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [joinCode, setJoinCode] = useState('');
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [isWorking, setIsWorking] = useState(false);
+  const [showCodeCopied, setShowCodeCopied] = useState(false);
+  const copyConfirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyConfirmTimeoutRef.current) {
+        clearTimeout(copyConfirmTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let isActive = true;
@@ -2932,7 +3457,27 @@ function InviteCodeScreen({ userId, onComplete }: { userId: string; onComplete: 
       }
 
       if (!error && data?.couple_id) {
-        onComplete();
+        if (!suppressCoupledAutoRedirect) {
+          onComplete();
+          return;
+        }
+
+        const { data: coupleRow, error: coupleFetchError } = await supabase
+          .from('couples')
+          .select('invite_code')
+          .eq('id', data.couple_id)
+          .maybeSingle();
+
+        if (!isActive) {
+          return;
+        }
+
+        if (!coupleFetchError && typeof coupleRow?.invite_code === 'string') {
+          const trimmed = coupleRow.invite_code.trim();
+          setInviteCode(trimmed.length > 0 ? trimmed : null);
+        }
+
+        setIsLoadingProfile(false);
         return;
       }
 
@@ -2944,7 +3489,7 @@ function InviteCodeScreen({ userId, onComplete }: { userId: string; onComplete: 
     return () => {
       isActive = false;
     };
-  }, [onComplete, userId]);
+  }, [onComplete, suppressCoupledAutoRedirect, userId]);
 
   const createCouple = async () => {
     setErrorMessage('');
@@ -3002,25 +3547,40 @@ function InviteCodeScreen({ userId, onComplete }: { userId: string; onComplete: 
     onComplete();
   };
 
+  const copyInviteCode = async () => {
+    if (!inviteCode) {
+      return;
+    }
+    const six = inviteCode.slice(0, 6);
+    await Clipboard.setStringAsync(six);
+    setShowCodeCopied(true);
+    if (copyConfirmTimeoutRef.current) {
+      clearTimeout(copyConfirmTimeoutRef.current);
+    }
+    copyConfirmTimeoutRef.current = setTimeout(() => {
+      setShowCodeCopied(false);
+      copyConfirmTimeoutRef.current = null;
+    }, 2000);
+  };
+
   const shareInviteCode = async () => {
     if (!inviteCode) {
       return;
     }
-
+    const six = inviteCode.slice(0, 6);
     await Share.share({
-      message: `I'm using OurSpark to connect with you every day. Download the app and use my code ${inviteCode} to join me.
-
-Download here: https://ourspark.app (coming soon)
-
-One question a day. Answered together.`,
+      message: `Hey! Join me on OurSpark - our code is: ${six}. Download OurSpark on the App Store: https://apps.apple.com/app/ourspark/id[YOUR_APP_ID]`,
     });
   };
 
   if (isLoadingProfile) {
     return (
       <SafeAreaView style={styles.screen} edges={['top']}>
-        <View style={styles.loadingRoot}>
-          <ActivityIndicator size="large" color={ORANGE} />
+        <View style={styles.flex}>
+          <View style={styles.loadingRoot}>
+            <ActivityIndicator size="large" color={ORANGE} />
+          </View>
+          <InviteStageTabBar onPressTab={onNavigateToMainTab} />
         </View>
       </SafeAreaView>
     );
@@ -3028,74 +3588,88 @@ One question a day. Answered together.`,
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-      >
-        <ScrollView
+      <View style={styles.flex}>
+        <KeyboardAvoidingView
           style={styles.flex}
-          contentContainerStyle={styles.inviteScroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         >
-          <Text style={styles.inviteHeading}>Connect With Your Partner</Text>
-          <Text style={styles.inviteSubheading}>Create a new spark or join your partner&apos;s</Text>
-
-          <TouchableOpacity
-            activeOpacity={0.9}
-            style={styles.inviteActionButton}
-            onPress={createCouple}
-            disabled={isWorking}
+          <ScrollView
+            style={styles.flex}
+            contentContainerStyle={styles.inviteScroll}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
           >
-            <Text style={styles.inviteActionButtonText}>Create Our Spark</Text>
-          </TouchableOpacity>
+            <Text style={styles.inviteHeading}>Connect With Your Partner</Text>
+            <Text style={styles.inviteSubheading}>Create a new spark or join your partner&apos;s</Text>
 
-          {inviteCode ? (
-            <View style={styles.generatedCodeWrap}>
-              <TouchableOpacity activeOpacity={0.85} style={styles.generatedCodeButton} onPress={shareInviteCode}>
-                <Text style={styles.generatedCodeText}>{inviteCode}</Text>
-              </TouchableOpacity>
-              <Text style={styles.generatedCodeTapHint}>Tap to share</Text>
-              <TouchableOpacity
-                activeOpacity={0.9}
-                style={styles.inviteActionButton}
-                onPress={onComplete}
-                disabled={isWorking}
-              >
-                <Text style={styles.inviteActionButtonText}>Continue</Text>
-              </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.9}
+              style={styles.inviteActionButton}
+              onPress={createCouple}
+              disabled={isWorking}
+            >
+              <Text style={styles.inviteActionButtonText}>Create Our Spark</Text>
+            </TouchableOpacity>
+
+            {inviteCode ? (
+              <View style={styles.generatedCodeWrap}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.generatedCodeButton}
+                  onPress={() => void copyInviteCode()}
+                >
+                  <Text style={styles.generatedCodeText}>{inviteCode}</Text>
+                </TouchableOpacity>
+                <Text
+                  style={showCodeCopied ? styles.generatedCodeCopiedHint : styles.generatedCodeTapHint}
+                >
+                  {showCodeCopied ? 'Code copied!' : 'Tap to copy'}
+                </Text>
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  style={styles.invitePrimaryButton}
+                  onPress={() => void shareInviteCode()}
+                  disabled={isWorking}
+                >
+                  <Text style={styles.invitePrimaryButtonText}>Share Your Code</Text>
+                </TouchableOpacity>
+                <TouchableOpacity activeOpacity={0.8} onPress={onComplete} disabled={isWorking}>
+                  <Text style={styles.inviteGoDashboardLink}>Go to Dashboard</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
+            <View style={styles.orRow}>
+              <View style={styles.orLine} />
+              <Text style={styles.orText}>OR</Text>
+              <View style={styles.orLine} />
             </View>
-          ) : null}
 
-          <View style={styles.orRow}>
-            <View style={styles.orLine} />
-            <Text style={styles.orText}>OR</Text>
-            <View style={styles.orLine} />
-          </View>
+            <TextInput
+              style={styles.authInput}
+              placeholder="Enter your partner's code"
+              placeholderTextColor={`${CREAM}99`}
+              value={joinCode}
+              onChangeText={(text) => setJoinCode(text.toUpperCase())}
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
 
-          <TextInput
-            style={styles.authInput}
-            placeholder="Enter your partner's code"
-            placeholderTextColor={`${CREAM}99`}
-            value={joinCode}
-            onChangeText={(text) => setJoinCode(text.toUpperCase())}
-            autoCapitalize="characters"
-            autoCorrect={false}
-          />
+            <TouchableOpacity
+              activeOpacity={0.9}
+              style={styles.inviteActionButton}
+              onPress={joinCouple}
+              disabled={isWorking}
+            >
+              <Text style={styles.inviteActionButtonText}>Join Our Spark</Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            activeOpacity={0.9}
-            style={styles.inviteActionButton}
-            onPress={joinCouple}
-            disabled={isWorking}
-          >
-            <Text style={styles.inviteActionButtonText}>Join Our Spark</Text>
-          </TouchableOpacity>
-
-          {errorMessage ? <Text style={styles.inviteError}>{errorMessage}</Text> : null}
-        </ScrollView>
-      </KeyboardAvoidingView>
+            {errorMessage ? <Text style={styles.inviteError}>{errorMessage}</Text> : null}
+          </ScrollView>
+        </KeyboardAvoidingView>
+        <InviteStageTabBar onPressTab={onNavigateToMainTab} />
+      </View>
     </SafeAreaView>
   );
 }
@@ -3103,6 +3677,7 @@ One question a day. Answered together.`,
 function AuthScreen({
   mode,
   onSubmit,
+  onForgotPassword,
   onSwitchMode,
 }: {
   mode: AuthMode;
@@ -3112,6 +3687,7 @@ function AuthScreen({
     email: string;
     password: string;
   }) => Promise<string | null>;
+  onForgotPassword: (email: string) => Promise<void>;
   onSwitchMode: () => void;
 }) {
   const isLogin = mode === 'login';
@@ -3196,6 +3772,11 @@ function AuthScreen({
           >
             <Text style={styles.authButtonText}>{isLogin ? 'Sign In' : 'Create My Account'}</Text>
           </TouchableOpacity>
+          {isLogin ? (
+            <TouchableOpacity activeOpacity={0.8} onPress={() => void onForgotPassword(email)}>
+              <Text style={styles.authForgotText}>Forgot your password?</Text>
+            </TouchableOpacity>
+          ) : null}
           {authError ? <Text style={styles.authErrorText}>{authError}</Text> : null}
 
           <TouchableOpacity activeOpacity={0.8} onPress={onSwitchMode}>
@@ -3466,6 +4047,7 @@ function VaultScreen({
   const [activeCoupleId, setActiveCoupleId] = useState<string | null>(null);
   const [isPro, setIsPro] = useState(true);
   const [hasCouple, setHasCouple] = useState(false);
+  const [vaultPartnerSaidLabel, setVaultPartnerSaidLabel] = useState(`${PARTNER_HEADING_FALLBACK} said:`);
 
   const loadVault = useCallback(async () => {
     setLoading(true);
@@ -3481,6 +4063,7 @@ function VaultScreen({
       setIsPro(true);
       setHasCouple(false);
       setActiveCoupleId(null);
+      setVaultPartnerSaidLabel(`${PARTNER_HEADING_FALLBACK} said:`);
       setLoading(false);
       return;
     }
@@ -3489,6 +4072,8 @@ function VaultScreen({
 
     const coupleId = String(profile.couple_id);
     setActiveCoupleId(coupleId);
+    const vaultPartnerRow = await fetchPartnerProfileRow(coupleId, userId);
+    setVaultPartnerSaidLabel(`${partnerHeadingFirstName(vaultPartnerRow)} said:`);
     const pro = await checkIsPro(coupleId);
     setIsPro(pro);
 
@@ -3686,7 +4271,7 @@ function VaultScreen({
                     <Text style={styles.vaultAnswerBody}>{m.youSaid || '-'}</Text>
                   </View>
                   <View style={styles.vaultAnswerCol}>
-                    <Text style={styles.vaultTheyLabel}>They said:</Text>
+                    <Text style={styles.vaultTheyLabel}>{vaultPartnerSaidLabel}</Text>
                     <Text style={styles.vaultAnswerBody}>{m.theySaid || '-'}</Text>
                   </View>
                 </View>
@@ -3700,7 +4285,7 @@ function VaultScreen({
           <View style={styles.proUpgradeCard}>
             <Text style={styles.proUpgradeTitle}>Your full story lives here.</Text>
             <Text style={styles.proUpgradeBody}>
-              Unlock everything you&apos;ve ever shared - for both of you.
+              Go Pro to keep moments longer than 7 days.
             </Text>
             <TouchableOpacity
               activeOpacity={0.9}
@@ -3878,7 +4463,7 @@ function PacksScreen({
     }
     return map;
   }, [couplePacks]);
-  const corePacks = useMemo(() => {
+  const orderedPacks = useMemo(() => {
     const order = [
       'Spicy Pack',
       'Dream Life Pack',
@@ -3888,11 +4473,28 @@ function PacksScreen({
       'Spring Forward',
     ];
     const rank = new Map(order.map((name, idx) => [name, idx]));
-    return packs
-      .filter((p) => !p.isHoliday)
-      .sort((a, b) => (rank.get(a.name) ?? 999) - (rank.get(b.name) ?? 999));
-  }, [packs]);
-  const holidayPacks = useMemo(() => packs.filter((p) => p.isHoliday), [packs]);
+    const statusRank = (pack: PackRow): number => {
+      const cp = couplePackByPackId.get(pack.id);
+      if (cp?.status === 'active') {
+        return 0;
+      }
+      if (ownedPackIds.has(pack.id)) {
+        return 1;
+      }
+      return 2;
+    };
+    return [...packs].sort((a, b) => {
+      const statusDelta = statusRank(a) - statusRank(b);
+      if (statusDelta !== 0) {
+        return statusDelta;
+      }
+      const rankDelta = (rank.get(a.name) ?? 999) - (rank.get(b.name) ?? 999);
+      if (rankDelta !== 0) {
+        return rankDelta;
+      }
+      return a.name.localeCompare(b.name);
+    });
+  }, [couplePackByPackId, ownedPackIds, packs]);
 
   const canManageActivePack = Boolean(
     activeCouplePack && activeCouplePack.activatedBy && activeCouplePack.activatedBy === currentUserId
@@ -3994,7 +4596,7 @@ function PacksScreen({
           <View style={styles.packCardSpacer} />
         </View>
         <View style={styles.packCardBottomRow}>
-          <Text style={styles.packCardPrice}>{pack.priceLabel}</Text>
+          <Text style={styles.packCardPrice}>{isOwned && !isActive ? 'Owned' : pack.priceLabel}</Text>
           <Text style={styles.packCardDuration}>{pack.durationDays} days</Text>
         </View>
         {isOwned && !isActive ? (
@@ -4013,11 +4615,17 @@ function PacksScreen({
 
   const selectedCouplePack = selectedPack ? couplePackByPackId.get(selectedPack.id) ?? null : null;
   const selectedOwned = selectedPack ? ownedPackIds.has(selectedPack.id) : false;
-  const hasAnotherActivePack = Boolean(
-    activeCouplePack && selectedPack && activeCouplePack.packId !== selectedPack.id && activeCouplePack.status === 'active'
-  );
   const selectedIsActive = Boolean(selectedCouplePack?.status === 'active');
-  const selectedIsCompleted = Boolean(selectedCouplePack?.status === 'completed');
+  const packsForGrid = useMemo(
+    () =>
+      orderedPacks.filter((pack) => {
+        if (!activeCouplePack) {
+          return true;
+        }
+        return pack.id !== activeCouplePack.packId;
+      }),
+    [activeCouplePack, orderedPacks]
+  );
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -4064,11 +4672,14 @@ function PacksScreen({
           </>
         ) : null}
 
-        <Text style={styles.packsSectionLabelCore}>CORE PACKS</Text>
-        <View style={styles.packGrid}>{corePacks.map((pack) => renderPackCard(pack))}</View>
-
-        <Text style={styles.packsSectionLabelCore}>HOLIDAY PACKS</Text>
-        <View style={styles.packGrid}>{holidayPacks.map((pack) => renderPackCard(pack))}</View>
+        <View
+          style={[
+            styles.packGrid,
+            activePack && activeCouplePack ? styles.packGridAfterActive : null,
+          ]}
+        >
+          {packsForGrid.map((pack) => renderPackCard(pack))}
+        </View>
 
         {loading ? (
           <View style={styles.packsLoadingWrap}>
@@ -4135,21 +4746,14 @@ function PacksScreen({
                 >
                   <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Get This Pack</Text>
                 </TouchableOpacity>
-              ) : selectedIsCompleted ? (
-                <View style={styles.packDetailDisabledBtn}>
-                  <Ionicons name="checkmark" size={18} color="#FFFFFF" />
-                  <Text style={styles.packDetailDisabledBtnText}>Completed</Text>
-                </View>
               ) : selectedIsActive ? (
-                <View style={styles.packDetailDisabledBtn}>
-                  <Text style={styles.packDetailDisabledBtnText}>Currently Active</Text>
-                </View>
-              ) : hasAnotherActivePack ? (
                 <>
-                  <View style={[styles.packDetailPrimaryBtn, styles.packDetailPrimaryBtnDisabled]}>
-                    <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Start Pack</Text>
+                  <View style={styles.packDetailDisabledBtn}>
+                    <Text style={styles.packDetailDisabledBtnText}>Active</Text>
                   </View>
-                  <Text style={styles.packDetailDisabledHint}>Finish your active pack first</Text>
+                  <TouchableOpacity activeOpacity={0.9} style={styles.packDetailPrimaryBtn} onPress={() => setShowPauseModal(true)}>
+                    <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Pause</Text>
+                  </TouchableOpacity>
                 </>
               ) : (
                 <TouchableOpacity
@@ -4157,7 +4761,7 @@ function PacksScreen({
                   style={styles.packDetailPrimaryBtn}
                   onPress={() => void startPack(selectedPack)}
                 >
-                  <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Start Pack</Text>
+                  <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Activate</Text>
                 </TouchableOpacity>
               )}
             </ScrollView>
@@ -4180,6 +4784,7 @@ function MainTabs({
   userId,
   onPurchase,
   onOpenSubscriptionPlans,
+  onNavigateToPartnerSetup,
 }: {
   userId: string;
   onPurchase: (
@@ -4189,6 +4794,7 @@ function MainTabs({
     userId: string
   ) => Promise<void>;
   onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
+  onNavigateToPartnerSetup: () => void;
 }) {
   return (
     <Tab.Navigator
@@ -4217,7 +4823,13 @@ function MainTabs({
           tabBarIcon: ({ color }) => <Ionicons name="grid-outline" size={24} color={color} />,
         }}
       >
-        {() => <DashboardScreen userId={userId} onOpenSubscriptionPlans={onOpenSubscriptionPlans} />}
+        {() => (
+          <DashboardScreen
+            userId={userId}
+            onOpenSubscriptionPlans={onOpenSubscriptionPlans}
+            onNavigateToPartnerSetup={onNavigateToPartnerSetup}
+          />
+        )}
       </Tab.Screen>
       <Tab.Screen
         name="Question"
@@ -4301,6 +4913,15 @@ function PersonalizationScreen({
 
   const saveAndContinue = async () => {
     setIsSaving(true);
+    const { data: authData } = await supabase.auth.getUser();
+    const metadataNameRaw = authData.user?.user_metadata as Record<string, unknown> | undefined;
+    const metadataName =
+      typeof metadataNameRaw?.name === 'string'
+        ? metadataNameRaw.name.trim()
+        : typeof metadataNameRaw?.first_name === 'string'
+          ? metadataNameRaw.first_name.trim()
+          : '';
+
     const payload = {
       anniversary_day: toNullableNumber(anniversaryDay),
       anniversary_month: toNullableNumber(anniversaryMonth),
@@ -4308,6 +4929,7 @@ function PersonalizationScreen({
       birthday_month: toNullableNumber(birthdayMonth),
       partner_birthday_day: toNullableNumber(partnerBirthdayDay),
       partner_birthday_month: toNullableNumber(partnerBirthdayMonth),
+      ...(metadataName ? { name: metadataName } : {}),
     };
 
     const updateResult = await supabase
@@ -4436,6 +5058,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [appStage, setAppStage] = useState<AppStage>('marketing');
+  const [inviteFromMainNav, setInviteFromMainNav] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [purchaseToast, setPurchaseToast] = useState<string | null>(null);
@@ -4445,8 +5068,15 @@ export default function App() {
   const [planPickerUserId, setPlanPickerUserId] = useState<string | null>(null);
   const appStageRef = useRef(appStage);
   const pendingNavigateToQuestionRef = useRef(false);
+  const invitePendingMainTabRef = useRef<keyof MainTabParamList | null>(null);
 
   appStageRef.current = appStage;
+
+  useEffect(() => {
+    if (appStage !== 'invite') {
+      setInviteFromMainNav(false);
+    }
+  }, [appStage]);
 
   useEffect(() => {
     WebBrowser.maybeCompleteAuthSession();
@@ -4606,6 +5236,23 @@ export default function App() {
     return () => clearTimeout(id);
   }, [appStage]);
 
+  useEffect(() => {
+    if (appStage !== 'main') {
+      return;
+    }
+    const pending = invitePendingMainTabRef.current;
+    if (!pending) {
+      return;
+    }
+    invitePendingMainTabRef.current = null;
+    const id = setTimeout(() => {
+      if (navigationRef.isReady()) {
+        navigationRef.navigate(pending);
+      }
+    }, 0);
+    return () => clearTimeout(id);
+  }, [appStage]);
+
   if (!fontsLoaded && !fontError) {
     return <LoadingScreen />;
   }
@@ -4632,6 +5279,10 @@ export default function App() {
             userId={currentUserId ?? ''}
             onPurchase={handlePurchase}
             onOpenSubscriptionPlans={openSubscriptionPlans}
+            onNavigateToPartnerSetup={() => {
+              setInviteFromMainNav(true);
+              setAppStage('invite');
+            }}
           />
         ) : appStage === 'personalization' && currentUserId ? (
           <PersonalizationScreen
@@ -4640,7 +5291,15 @@ export default function App() {
             onSkip={() => setAppStage('invite')}
           />
         ) : appStage === 'invite' && currentUserId ? (
-          <InviteCodeScreen userId={currentUserId} onComplete={() => setAppStage('main')} />
+          <InviteCodeScreen
+            userId={currentUserId}
+            suppressCoupledAutoRedirect={inviteFromMainNav}
+            onComplete={() => setAppStage('main')}
+            onNavigateToMainTab={(name) => {
+              invitePendingMainTabRef.current = name;
+              setAppStage('main');
+            }}
+          />
         ) : appStage === 'marketing' ? (
           <MarketingHomeScreen
             onBeginOurStory={() => {
@@ -4670,6 +5329,16 @@ export default function App() {
                 console.log('Supabase signUp error:', JSON.stringify(error));
 
                 if (!error && data?.user?.id) {
+                  const trimmedFirstName = firstName.trim();
+                  if (trimmedFirstName) {
+                    await supabase.from('profiles').upsert(
+                      {
+                        id: data.user.id,
+                        name: trimmedFirstName,
+                      },
+                      { onConflict: 'id' }
+                    );
+                  }
                   setCurrentUserId(data.user.id);
                   setAppStage('personalization');
                   return null;
@@ -4686,6 +5355,21 @@ export default function App() {
               setAppStage('main');
               return null;
             }}
+            onForgotPassword={async (email) => {
+              const trimmedEmail = email.trim();
+              if (!trimmedEmail) {
+                Alert.alert('Please enter your email address first.');
+                return;
+              }
+
+              const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail);
+              if (error) {
+                Alert.alert(error.message);
+                return;
+              }
+
+              Alert.alert('Check your email for a password reset link.');
+            }}
             onSwitchMode={() => setAuthMode((prev) => (prev === 'login' ? 'signup' : 'login'))}
           />
         )}
@@ -4697,13 +5381,23 @@ export default function App() {
         >
           <View style={styles.planPickerOverlay}>
             <View style={styles.planPickerCard}>
+              <View style={styles.planPickerHeaderRow}>
+                <View style={styles.planPickerHeaderSpacer} />
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  onPress={() => setShowPlanPicker(false)}
+                >
+                  <Text style={styles.planPickerDismissText}>Maybe Later</Text>
+                </TouchableOpacity>
+              </View>
               <TouchableOpacity
                 activeOpacity={0.9}
                 style={styles.planPickerMonthlyBtn}
                 onPress={() => {
                   if (planPickerCoupleId && planPickerUserId) {
                     void handlePurchase(
-                      'price_1TJgwDFOEYkDbO35raVqORLj',
+                      'price_1TLniVF7yuKTWofOqHkCfAMC',
                       'subscription',
                       planPickerCoupleId,
                       planPickerUserId
@@ -4721,7 +5415,7 @@ export default function App() {
                 onPress={() => {
                   if (planPickerCoupleId && planPickerUserId) {
                     void handlePurchase(
-                      'price_1TJgx2FOEYkDbO35CDDxw6ED',
+                      'price_1TLniVF7yuKTWofO95sfzgmK',
                       'subscription',
                       planPickerCoupleId,
                       planPickerUserId
@@ -4847,6 +5541,14 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: CREAM,
     letterSpacing: 0.3,
+  },
+  authForgotText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: 10,
+    opacity: 0.7,
   },
   authSwitchText: {
     fontFamily: FONT_BODY,
@@ -4979,6 +5681,35 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: CREAM,
   },
+  invitePrimaryButton: {
+    width: '100%',
+    borderRadius: 14,
+    backgroundColor: '#F48F4F',
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    shadowColor: '#F48F4F',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  invitePrimaryButtonText: {
+    fontFamily: FONT_BODY,
+    fontSize: 16,
+    color: CREAM,
+    letterSpacing: 0.3,
+  },
+  inviteGoDashboardLink: {
+    fontFamily: FONT_BODY,
+    fontSize: 13,
+    color: CREAM,
+    opacity: 0.55,
+    textAlign: 'center',
+    paddingVertical: 8,
+    textDecorationLine: 'underline',
+  },
   generatedCodeWrap: {
     alignItems: 'center',
     marginBottom: 4,
@@ -5007,6 +5738,33 @@ const styles = StyleSheet.create({
     color: CREAM,
     marginTop: 8,
     marginBottom: 12,
+  },
+  generatedCodeCopiedHint: {
+    fontFamily: FONT_BODY,
+    fontSize: 12,
+    color: ORANGE,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  inviteStageTabBarRoot: {
+    flexDirection: 'row',
+    backgroundColor: CARD_BG,
+    borderTopColor: `${PURPLE}55`,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 6,
+  },
+  inviteStageTabItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+  },
+  inviteStageTabLabel: {
+    fontFamily: FONT_BODY,
+    fontSize: 12,
+    letterSpacing: 0.3,
+    color: `${CREAM}99`,
+    marginTop: 2,
   },
   orRow: {
     flexDirection: 'row',
@@ -5072,7 +5830,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     marginHorizontal: 20,
-    marginTop: -2,
+    marginTop: 14,
     marginBottom: 8,
   },
   dbStatusSmall: {
@@ -6340,16 +7098,58 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 8,
   },
-  dbWrappedPreviewBtn: {
+  dbAddPartnerLinkWrap: {
     alignSelf: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    marginBottom: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginBottom: 8,
   },
-  dbWrappedPreviewText: {
+  dbAddPartnerLinkText: {
     fontFamily: FONT_BODY,
-    color: '#8A8A8A',
-    fontSize: 13,
+    color: CREAM,
+    fontSize: 12,
+    opacity: 0.55,
+    textAlign: 'center',
+    textDecorationLine: 'underline',
+  },
+  dbAccountLinksRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'center',
+    marginTop: 8,
+    paddingBottom: 20,
+  },
+  dbSignOutLinkWrap: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+  },
+  dbSignOutLinkText: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 12,
+    opacity: 0.5,
+    textAlign: 'center',
+  },
+  dbAccountLinkSeparator: {
+    fontFamily: FONT_BODY,
+    color: CREAM,
+    fontSize: 12,
+    opacity: 0.5,
+  },
+  dbDeleteAccountLinkWrap: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+  },
+  dbDeleteAccountLinkText: {
+    fontFamily: FONT_BODY,
+    color: '#ff6b6b',
+    fontSize: 12,
+    textAlign: 'center',
   },
   wrappedModalRoot: {
     flex: 1,
@@ -6733,6 +7533,9 @@ const styles = StyleSheet.create({
     rowGap: 8,
     marginBottom: 4,
   },
+  packGridAfterActive: {
+    marginTop: 24,
+  },
   packCard: {
     borderRadius: 16,
     padding: 16,
@@ -6990,6 +7793,20 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 20,
     gap: 12,
+  },
+  planPickerHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  planPickerHeaderSpacer: {
+    flex: 1,
+  },
+  planPickerDismissText: {
+    fontFamily: FONT_BODY,
+    fontSize: 13,
+    color: `${CREAM}66`,
+    letterSpacing: 0.2,
   },
   planPickerMonthlyBtn: {
     backgroundColor: '#F48F4F',

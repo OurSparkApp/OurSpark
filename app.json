@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "ourspark",
+    "name": "OurSpark",
     "slug": "ourspark",
     "scheme": "ourspark",
     "version": "1.0.0",
@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#090236"
     },
     "notification": {
       "icon": "./assets/icon.png",
@@ -19,7 +19,10 @@
     },
     "ios": {
       "bundleIdentifier": "com.ourspark.app",
-      "supportsTablet": false
+      "supportsTablet": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -28,7 +31,15 @@
       },
       "package": "com.ourspark.app",
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -46,6 +57,11 @@
       "expo-secure-store",
       "expo-media-library",
       "expo-web-browser"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "562a5ab8-439c-4cf9-add6-2e8d4dd6a217"
+      }
+    }
   }
 }

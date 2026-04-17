@@ -13,7 +13,7 @@ function getMonthDayFromScheduledDateRaw(raw: unknown): { month: number; day: nu
     if (ymd) {
       return { month: Number.parseInt(ymd[2], 10), day: Number.parseInt(ymd[3], 10) };
     }
-    const d = new Date(trimmed);
+    const d = new Date(trimmed.includes('T') ? trimmed : `${trimmed}T12:00:00`);
     if (!Number.isNaN(d.getTime())) {
       return { month: d.getMonth() + 1, day: d.getDate() };
     }
