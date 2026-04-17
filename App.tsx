@@ -3569,7 +3569,7 @@ function InviteCodeScreen({
     }
     const six = inviteCode.slice(0, 6);
     await Share.share({
-      message: `Hey! Join me on OurSpark - our code is: ${six}. Download OurSpark on the App Store: https://apps.apple.com/app/ourspark/id[YOUR_APP_ID]`,
+      message: `Hey! Join me on OurSpark - our code is: ${six}. Download OurSpark on the App Store: https://apps.apple.com/us/app/ourspark/id6762099560`,
     });
   };
 
@@ -4615,6 +4615,7 @@ function PacksScreen({
 
   const selectedCouplePack = selectedPack ? couplePackByPackId.get(selectedPack.id) ?? null : null;
   const selectedOwned = selectedPack ? ownedPackIds.has(selectedPack.id) : false;
+  const selectedIsPaused = Boolean(selectedCouplePack?.status === 'paused');
   const selectedIsActive = Boolean(selectedCouplePack?.status === 'active');
   const packsForGrid = useMemo(
     () =>
@@ -4636,7 +4637,15 @@ function PacksScreen({
         {activePack && activeCouplePack ? (
           <>
             <Text style={styles.packsSectionLabel}>ACTIVE PACK</Text>
-            <View style={[styles.activePackCard, { backgroundColor: activePack.color }]}>
+            <TouchableOpacity
+              activeOpacity={activeCouplePack.status === 'paused' ? 0.9 : 1}
+              style={[styles.activePackCard, { backgroundColor: activePack.color }]}
+              onPress={() => {
+                if (activeCouplePack.status === 'paused') {
+                  setSelectedPack(activePack);
+                }
+              }}
+            >
               <View style={styles.activePackTop}>
                 <Text style={styles.activePackEmoji}>{activePack.emoji}</Text>
                 <Text style={styles.activePackName}>{activePack.name}</Text>
@@ -4668,7 +4677,7 @@ function PacksScreen({
                   <Text style={[styles.activePackResumeBtnText, { color: activePack.color }]}>Resume Pack</Text>
                 </TouchableOpacity>
               ) : null}
-            </View>
+            </TouchableOpacity>
           </>
         ) : null}
 
@@ -4746,6 +4755,22 @@ function PacksScreen({
                 >
                   <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Get This Pack</Text>
                 </TouchableOpacity>
+              ) : selectedIsPaused ? (
+                <>
+                  <View style={styles.packDetailDisabledBtn}>
+                    <Text style={styles.packDetailDisabledBtnText}>Paused</Text>
+                  </View>
+                  <TouchableOpacity
+                    activeOpacity={0.9}
+                    style={styles.packDetailPrimaryBtn}
+                    onPress={() => {
+                      void resumePack();
+                      setSelectedPack(null);
+                    }}
+                  >
+                    <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Resume</Text>
+                  </TouchableOpacity>
+                </>
               ) : selectedIsActive ? (
                 <>
                   <View style={styles.packDetailDisabledBtn}>
