@@ -19,6 +19,7 @@
     },
     "ios": {
       "bundleIdentifier": "com.ourspark.app",
+      "requiresFullScreen": true,
       "supportsTablet": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
