@@ -2070,22 +2070,26 @@ function DashboardScreen({
 
       </ScrollView>
 
-      <OurSparkWrappedModal
-        visible={showWrapped}
-        onClose={() => setShowWrapped(false)}
-        data={wrappedData}
-        loading={wrappedLoading}
-      />
+      {showWrapped ? (
+        <OurSparkWrappedModal
+          visible
+          onClose={() => setShowWrapped(false)}
+          data={wrappedData}
+          loading={wrappedLoading}
+        />
+      ) : null}
 
-      <WrappedTeaserModal
-        visible={showWrappedTeaser}
-        onClose={() => setShowWrappedTeaser(false)}
-        onUnlock={() => {
-          if (coupleId) {
-            onOpenSubscriptionPlans(coupleId, userId);
-          }
-        }}
-      />
+      {showWrappedTeaser ? (
+        <WrappedTeaserModal
+          visible
+          onClose={() => setShowWrappedTeaser(false)}
+          onUnlock={() => {
+            if (coupleId) {
+              onOpenSubscriptionPlans(coupleId, userId);
+            }
+          }}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -5398,62 +5402,59 @@ export default function App() {
             onSwitchMode={() => setAuthMode((prev) => (prev === 'login' ? 'signup' : 'login'))}
           />
         )}
-        <Modal
-          visible={showPlanPicker}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setShowPlanPicker(false)}
-        >
-          <View style={styles.planPickerOverlay}>
-            <View style={styles.planPickerCard}>
-              <View style={styles.planPickerHeaderRow}>
-                <View style={styles.planPickerHeaderSpacer} />
+        {showPlanPicker ? (
+          <Modal visible transparent animationType="fade" onRequestClose={() => setShowPlanPicker(false)}>
+            <View style={styles.planPickerOverlay}>
+              <View style={styles.planPickerCard}>
+                <View style={styles.planPickerHeaderRow}>
+                  <View style={styles.planPickerHeaderSpacer} />
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    onPress={() => setShowPlanPicker(false)}
+                  >
+                    <Text style={styles.planPickerDismissText}>Maybe Later</Text>
+                  </TouchableOpacity>
+                </View>
                 <TouchableOpacity
-                  activeOpacity={0.7}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  onPress={() => setShowPlanPicker(false)}
+                  activeOpacity={0.9}
+                  style={styles.planPickerMonthlyBtn}
+                  onPress={() => {
+                    if (planPickerCoupleId && planPickerUserId) {
+                      void handlePurchase(
+                        'price_1TLniVF7yuKTWofOqHkCfAMC',
+                        'subscription',
+                        planPickerCoupleId,
+                        planPickerUserId
+                      );
+                    }
+                    setShowPlanPicker(false);
+                  }}
                 >
-                  <Text style={styles.planPickerDismissText}>Maybe Later</Text>
+                  <Text style={styles.planPickerMonthlyBtnText}>Monthly - $8.99/month</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  activeOpacity={0.9}
+                  style={styles.planPickerAnnualBtn}
+                  onPress={() => {
+                    if (planPickerCoupleId && planPickerUserId) {
+                      void handlePurchase(
+                        'price_1TLniVF7yuKTWofO95sfzgmK',
+                        'subscription',
+                        planPickerCoupleId,
+                        planPickerUserId
+                      );
+                    }
+                    setShowPlanPicker(false);
+                  }}
+                >
+                  <Text style={styles.planPickerAnnualBtnText}>Annual - $59.99/year - Save 44%</Text>
                 </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                activeOpacity={0.9}
-                style={styles.planPickerMonthlyBtn}
-                onPress={() => {
-                  if (planPickerCoupleId && planPickerUserId) {
-                    void handlePurchase(
-                      'price_1TLniVF7yuKTWofOqHkCfAMC',
-                      'subscription',
-                      planPickerCoupleId,
-                      planPickerUserId
-                    );
-                  }
-                  setShowPlanPicker(false);
-                }}
-              >
-                <Text style={styles.planPickerMonthlyBtnText}>Monthly - $8.99/month</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                activeOpacity={0.9}
-                style={styles.planPickerAnnualBtn}
-                onPress={() => {
-                  if (planPickerCoupleId && planPickerUserId) {
-                    void handlePurchase(
-                      'price_1TLniVF7yuKTWofO95sfzgmK',
-                      'subscription',
-                      planPickerCoupleId,
-                      planPickerUserId
-                    );
-                  }
-                  setShowPlanPicker(false);
-                }}
-              >
-                <Text style={styles.planPickerAnnualBtnText}>Annual - $59.99/year - Save 44%</Text>
-              </TouchableOpacity>
             </View>
-          </View>
-        </Modal>
+          </Modal>
+        ) : null}
         {purchaseToast ? (
           <View style={styles.purchaseToastWrap} pointerEvents="none">
             <View style={styles.purchaseToastInner}>
