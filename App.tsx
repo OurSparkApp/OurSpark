@@ -596,13 +596,80 @@ const ANSWER_MATCH_STOP_WORDS = new Set([
   'at',
 ]);
 
+function normalizeAnswerForMatch(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 function tokenizeAnswerForMatch(text: string): string[] {
-  return text
-    .toLowerCase()
+  const normalized = normalizeAnswerForMatch(text);
+  return normalized
     .replace(/[^a-z0-9\s'-]/g, ' ')
     .split(/\s+/)
     .map((w) => w.replace(/^['']+|['']+$/g, ''))
     .filter((w) => w.length > 0 && !ANSWER_MATCH_STOP_WORDS.has(w));
+}
+
+function wordsForConsecutivePhrase(text: string): string[] {
+  return normalizeAnswerForMatch(text)
+    .split(/\s+/)
+    .map((w) => w.replace(/[^a-z0-9'-]/gi, ''))
+    .filter((w) => w.length > 0);
+}
+
+function hasThreeConsecutiveMatchingWords(a: string, b: string): boolean {
+  const wa = wordsForConsecutivePhrase(a);
+  const wb = wordsForConsecutivePhrase(b);
+  if (wa.length < 3 || wb.length < 3) {
+    return false;
+  }
+  for (let i = 0; i <= wa.length - 3; i++) {
+    for (let j = 0; j <= wb.length - 3; j++) {
+      if (wa[i] === wb[j] && wa[i + 1] === wb[j + 1] && wa[i + 2] === wb[j + 2]) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function levenshteinDistance(s: string, t: string): number {
+  const m = s.length;
+  const n = t.length;
+  if (m === 0) {
+    return n;
+  }
+  if (n === 0) {
+    return m;
+  }
+  const v0 = new Array<number>(n + 1);
+  const v1 = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) {
+    v0[j] = j;
+  }
+  for (let i = 0; i < m; i++) {
+    v1[0] = i + 1;
+    for (let j = 0; j < n; j++) {
+      const cost = s.charCodeAt(i) === t.charCodeAt(j) ? 0 : 1;
+      v1[j + 1] = Math.min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost);
+    }
+    for (let j = 0; j <= n; j++) {
+      v0[j] = v1[j];
+    }
+  }
+  return v0[n];
+}
+
+function answerSimilarityRatio(a: string, b: string): number {
+  const s = normalizeAnswerForMatch(a);
+  const t = normalizeAnswerForMatch(b);
+  if (s.length === 0 && t.length === 0) {
+    return 1;
+  }
+  if (s.length === 0 || t.length === 0) {
+    return 0;
+  }
+  const d = levenshteinDistance(s, t);
+  return 1 - d / Math.max(s.length, t.length);
 }
 
 function countMatchingWordsBetweenAnswers(a: string, b: string): number {
@@ -627,7 +694,13 @@ function getAnswerMatchMeta(a: string, b: string): {
   labelColor: string;
 } {
   const matchWordCount = countMatchingWordsBetweenAnswers(a, b);
-  if (matchWordCount >= 3) {
+  const na = normalizeAnswerForMatch(a);
+  const nb = normalizeAnswerForMatch(b);
+  const bothNonEmpty = na.length > 0 && nb.length > 0;
+  const isPerfect =
+    bothNonEmpty &&
+    (hasThreeConsecutiveMatchingWords(a, b) || answerSimilarityRatio(a, b) > 0.8);
+  if (isPerfect) {
     return {
       tier: 'perfect',
       filledCircles: 5,
@@ -3269,7 +3342,16 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       >
         <Animated.View style={[styles.shareModalRoot, { opacity: perfectSyncOpacity }]}>
           <View style={styles.shareModalOverlay} />
-          <View style={styles.shareModalCenterColumn}>
+          <View style={styles.perfectSyncModalColumn}>
+            <TouchableOpacity
+              accessibilityLabel="Close"
+              activeOpacity={0.85}
+              style={styles.perfectSyncModalCloseBtn}
+              onPress={dismissPerfectSyncModal}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Ionicons name="close-outline" size={28} color={TEXT_ON_DARK} />
+            </TouchableOpacity>
             <ViewShot ref={perfectSyncCardRef} style={styles.perfectSyncCardWrap} options={{ format: 'png' }}>
               <View style={styles.perfectSyncGradientStack}>
                 <View style={styles.perfectSyncGradientTop} />
@@ -3300,7 +3382,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
               <Text style={styles.shareModalPrimaryButtonText}>Save to Camera Roll</Text>
             </TouchableOpacity>
             <TouchableOpacity activeOpacity={0.85} onPress={dismissPerfectSyncModal} style={styles.shareModalContinueWrap}>
-              <Text style={styles.shareModalContinueText}>Continue</Text>
+              <Text style={styles.shareModalContinueText}>Maybe Later</Text>
             </TouchableOpacity>
           </View>
         </Animated.View>
@@ -6603,6 +6685,19 @@ const styles = StyleSheet.create({
     width: 320,
     alignItems: 'stretch',
     zIndex: 1,
+  },
+  perfectSyncModalColumn: {
+    width: 320,
+    alignItems: 'stretch',
+    zIndex: 1,
+    position: 'relative',
+  },
+  perfectSyncModalCloseBtn: {
+    position: 'absolute',
+    right: 0,
+    top: -8,
+    zIndex: 4,
+    padding: 4,
   },
   perfectSyncCardWrap: {
     width: 320,
