@@ -5319,16 +5319,27 @@ export default function App() {
     }
 
     let cancelled = false;
+    const IAP_INIT_TIMEOUT_MS = 5000;
 
     void (async () => {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       try {
-        await connectAndLoadProducts(ALL_IAP_PRODUCT_IDS);
+        await Promise.race([
+          connectAndLoadProducts(ALL_IAP_PRODUCT_IDS),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('IAP init timeout')), IAP_INIT_TIMEOUT_MS);
+          }),
+        ]);
         if (!cancelled) {
           setIapReady(true);
           setIapPricesVersion((v) => v + 1);
         }
-      } catch (err) {
-        console.warn('IAP init failed:', err);
+      } catch {
+        // IAP unavailable or timed out — app continues without the store
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
       }
     })();
 
