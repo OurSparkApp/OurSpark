@@ -3353,24 +3353,19 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
             </TouchableOpacity>
             <ViewShot ref={perfectSyncCardRef} style={styles.perfectSyncCardWrap} options={{ format: 'png' }}>
               <View style={styles.perfectSyncGradientStack}>
-                <View style={styles.perfectSyncGradientTop} />
-                <View style={styles.perfectSyncGradientBottom} />
-              </View>
-              <View style={styles.perfectSyncCardContent}>
-                <Image source={HOME_LOGO} style={styles.perfectSyncLogo} resizeMode="contain" />
-                <View style={styles.perfectSyncCirclesRow}>
-                  {[0, 1, 2, 3, 4].map((i) => (
-                    <View key={i} style={styles.perfectSyncCircleFilled} />
-                  ))}
+                <View style={styles.perfectSyncGradientTop}>
+                  <Image source={HOME_LOGO} style={styles.perfectSyncLogo} resizeMode="contain" />
+                  <Text style={styles.perfectSyncTitle}>Perfect Sync</Text>
                 </View>
-                <Text style={styles.perfectSyncTitle}>Perfect Sync</Text>
-                <Text style={styles.perfectSyncSubtitle}>We answered as one</Text>
-                <Text style={styles.perfectSyncDate}>{todayLabel}</Text>
-                <View style={styles.shareCardDivider} />
-                <Text style={styles.shareCardTagline}>
-                  {"Keep the Spark"}
-                </Text>
-                <Text style={styles.shareCardDomain}>oursparkapp.com</Text>
+                <View style={styles.perfectSyncGradientBottom}>
+                  <Text style={styles.perfectSyncSubtitle}>We answered as one</Text>
+                  <Text style={styles.perfectSyncDate}>{todayLabel}</Text>
+                  <View style={styles.shareCardDivider} />
+                  <Text style={styles.shareCardTagline}>
+                    {"Keep the Spark"}
+                  </Text>
+                  <Text style={styles.shareCardDomain}>oursparkapp.com</Text>
+                </View>
               </View>
             </ViewShot>
             <TouchableOpacity
@@ -4535,11 +4530,13 @@ function PacksScreen({
   onPurchase,
   getIapPrice,
   onRestorePurchases,
+  onLoadIapOfferings,
 }: {
   userId: string;
   onPurchase: (productId: string, coupleId: string, userId: string) => Promise<void>;
   getIapPrice: (productId: string, fallback?: string) => string;
   onRestorePurchases: (coupleId: string, userId: string) => Promise<void>;
+  onLoadIapOfferings: () => Promise<boolean>;
 }) {
   const { width: screenWidth } = useWindowDimensions();
   const packCardWidth = (screenWidth - 48) / 2;
@@ -4551,6 +4548,7 @@ function PacksScreen({
   const [selectedPack, setSelectedPack] = useState<PackRow | null>(null);
   const [showPauseModal, setShowPauseModal] = useState(false);
   const [toastText, setToastText] = useState<string | null>(null);
+  const [offeringsStatus, setOfferingsStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   const showToast = useCallback((text: string) => {
     setToastText(text);
@@ -4598,7 +4596,18 @@ function PacksScreen({
   useFocusEffect(
     useCallback(() => {
       void loadPacks();
-    }, [loadPacks])
+      let cancelled = false;
+      setOfferingsStatus('loading');
+      void (async () => {
+        const ok = await onLoadIapOfferings();
+        if (!cancelled) {
+          setOfferingsStatus(ok ? 'ready' : 'error');
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [loadPacks, onLoadIapOfferings])
   );
 
   const activeCouplePack = useMemo(() => {
@@ -4880,6 +4889,19 @@ function PacksScreen({
           </View>
         ) : null}
 
+        {offeringsStatus === 'loading' ? (
+          <View style={styles.packsOfferingsLoadingWrap}>
+            <ActivityIndicator size="small" color={`${TEXT}66`} />
+            <Text style={styles.packsOfferingsLoadingText}>Connecting to the App Store…</Text>
+          </View>
+        ) : null}
+
+        {offeringsStatus === 'error' ? (
+          <Text style={styles.packsOfferingsErrorText}>
+            Unable to connect to the App Store. Please check your connection and try again.
+          </Text>
+        ) : null}
+
         {coupleId ? (
           <TouchableOpacity
             activeOpacity={0.7}
@@ -4942,8 +4964,15 @@ function PacksScreen({
               {!selectedOwned ? (
                 <TouchableOpacity
                   activeOpacity={0.9}
-                  style={styles.packDetailPrimaryBtn}
+                  disabled={offeringsStatus !== 'ready'}
+                  style={[
+                    styles.packDetailPrimaryBtn,
+                    offeringsStatus !== 'ready' ? styles.packDetailPrimaryBtnDisabled : null,
+                  ]}
                   onPress={() => {
+                    if (offeringsStatus !== 'ready') {
+                      return;
+                    }
                     if (selectedPack.iapProductId && coupleId) {
                       void onPurchase(selectedPack.iapProductId, coupleId, userId);
                     } else {
@@ -4951,9 +4980,13 @@ function PacksScreen({
                     }
                   }}
                 >
-                  <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>
-                    Get This Pack
-                  </Text>
+                  {offeringsStatus === 'loading' ? (
+                    <ActivityIndicator size="small" color={selectedPack.color} />
+                  ) : (
+                    <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>
+                      Get This Pack
+                    </Text>
+                  )}
                 </TouchableOpacity>
               ) : selectedIsPaused ? (
                 <>
@@ -5011,6 +5044,7 @@ function MainTabs({
   onOpenSubscriptionPlans,
   getIapPrice,
   onRestorePurchases,
+  onLoadIapOfferings,
   onNavigateToPartnerSetup,
 }: {
   userId: string;
@@ -5018,6 +5052,7 @@ function MainTabs({
   onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
   getIapPrice: (productId: string, fallback?: string) => string;
   onRestorePurchases: (coupleId: string, userId: string) => Promise<void>;
+  onLoadIapOfferings: () => Promise<boolean>;
   onNavigateToPartnerSetup: () => void;
 }) {
   return (
@@ -5077,6 +5112,7 @@ function MainTabs({
             onPurchase={onPurchase}
             getIapPrice={getIapPrice}
             onRestorePurchases={onRestorePurchases}
+            onLoadIapOfferings={onLoadIapOfferings}
           />
         )}
       </Tab.Screen>
@@ -5332,27 +5368,31 @@ export default function App() {
   );
 
   useEffect(() => {
-    let cancelled = false;
-
-    void (async () => {
+    const timer = setTimeout(() => {
       try {
-        Purchases.setLogLevel(LOG_LEVEL.INFO);
         Purchases.configure({
           apiKey: 'appl_RlJXYiZtXubiCKuvWKCkNBdlIWm',
         });
-        await fetchOfferingsAndCache();
-        if (!cancelled) {
-          setIapReady(true);
-          setIapPricesVersion((v) => v + 1);
-        }
+        setIapReady(true);
       } catch (err) {
         console.warn('RevenueCat init failed', err);
       }
-    })();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
 
-    return () => {
-      cancelled = true;
-    };
+  const loadIapOfferings = useCallback(async (): Promise<boolean> => {
+    try {
+      const offeringsPromise = fetchOfferingsAndCache();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 5000)
+      );
+      await Promise.race([offeringsPromise, timeoutPromise]);
+      setIapPricesVersion((v) => v + 1);
+      return true;
+    } catch {
+      return false;
+    }
   }, []);
 
   const syncSubscriptionForUser = useCallback(async (userId: string) => {
@@ -5566,6 +5606,7 @@ export default function App() {
             onOpenSubscriptionPlans={openSubscriptionPlans}
             getIapPrice={getIapPrice}
             onRestorePurchases={(coupleId, userId) => handleRestorePurchases(coupleId, userId)}
+            onLoadIapOfferings={loadIapOfferings}
             onNavigateToPartnerSetup={() => {
               setInviteFromMainNav(true);
               setAppStage('invite');
@@ -6733,38 +6774,32 @@ const styles = StyleSheet.create({
     minHeight: 360,
   },
   perfectSyncGradientStack: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
+    minHeight: 360,
     flexDirection: 'column',
   },
   perfectSyncGradientTop: {
     flex: 1,
     backgroundColor: DARK_BG,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    paddingTop: 28,
+    paddingBottom: 20,
   },
   perfectSyncGradientBottom: {
     flex: 1,
     backgroundColor: LINEN,
-  },
-  perfectSyncCardContent: {
-    padding: 32,
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    paddingTop: 20,
+    paddingBottom: 28,
   },
   perfectSyncLogo: {
     width: 80,
     height: 80,
     alignSelf: 'center',
-  },
-  perfectSyncCirclesRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 16,
-  },
-  perfectSyncCircleFilled: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    margin: 4,
-    backgroundColor: SAGE,
   },
   perfectSyncTitle: {
     fontFamily: FONT_HEADING,
@@ -6778,7 +6813,6 @@ const styles = StyleSheet.create({
     color: TEXT,
     fontSize: 16,
     textAlign: 'center',
-    marginTop: 8,
   },
   perfectSyncDate: {
     fontFamily: FONT_BODY,
@@ -7932,6 +7966,30 @@ const styles = StyleSheet.create({
   packsLoadingWrap: {
     paddingVertical: 20,
     alignItems: 'center',
+  },
+  packsOfferingsLoadingWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  packsOfferingsLoadingText: {
+    fontFamily: FONT_BODY,
+    fontSize: 13,
+    color: `${TEXT}66`,
+    textAlign: 'center',
+  },
+  packsOfferingsErrorText: {
+    fontFamily: FONT_BODY,
+    fontSize: 13,
+    color: `${TEXT}99`,
+    textAlign: 'center',
+    paddingHorizontal: 28,
+    paddingTop: 8,
+    paddingBottom: 4,
+    lineHeight: 20,
   },
   packsRestoreBtn: {
     alignSelf: 'center',
