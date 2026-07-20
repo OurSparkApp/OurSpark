@@ -5338,7 +5338,7 @@ export default function App() {
       try {
         Purchases.setLogLevel(LOG_LEVEL.INFO);
         Purchases.configure({
-          apiKey: 'test_BSpZisJDEsmfLEhzfSBAvmFpCLi',
+          apiKey: 'appl_RlJXYiZtXubiCKuvWKCkNBdlIWm',
         });
         await fetchOfferingsAndCache();
         if (!cancelled) {
