@@ -1,8 +1,12 @@
-import * as InAppPurchases from 'expo-in-app-purchases';
 import { Platform } from 'react-native';
+import Purchases, {
+  PURCHASES_ERROR_CODE,
+  type CustomerInfo,
+  type PurchasesPackage,
+} from 'react-native-purchases';
 import { supabase } from './supabase';
 
-export type IapProductId = string;
+export const PRO_ENTITLEMENT_ID = 'OurSpark Pro';
 
 export type PendingIapPurchase = {
   productId: string;
@@ -10,169 +14,168 @@ export type PendingIapPurchase = {
   userId: string;
 };
 
-let connected = false;
-let listenerRegistered = false;
-const productsById = new Map<string, InAppPurchases.IAPItemDetails>();
+const packagesByProductId = new Map<string, PurchasesPackage>();
 
-let pendingPurchase: PendingIapPurchase | null = null;
-let onPurchaseSettled: ((result: { success: boolean; productId: string; message: string }) => void) | null =
-  null;
+/** Set by App.tsx after constants are defined. */
+let proProductIds: string[] = [];
+let packProductIdToPackName: Record<string, string> = {};
 
-export function getIapProductDetails(productId: string): InAppPurchases.IAPItemDetails | undefined {
-  return productsById.get(productId);
-}
-
-export function getIapFormattedPrice(productId: string, fallback = ''): string {
-  return productsById.get(productId)?.price ?? fallback;
-}
-
-export function setPendingIapPurchase(ctx: PendingIapPurchase | null): void {
-  pendingPurchase = ctx;
-}
-
-export function setIapPurchaseSettledHandler(
-  handler: ((result: { success: boolean; productId: string; message: string }) => void) | null
+export function configureIapProductMaps(
+  proIds: string[],
+  packIdToName: Record<string, string>
 ): void {
-  onPurchaseSettled = handler;
+  proProductIds = proIds;
+  packProductIdToPackName = packIdToName;
 }
 
 export function isIapSupported(): boolean {
   return Platform.OS === 'ios' || Platform.OS === 'android';
 }
 
-export async function connectAndLoadProducts(productIds: string[]): Promise<void> {
-  if (!isIapSupported() || productIds.length === 0) {
+export function getPackageForProductId(productId: string): PurchasesPackage | undefined {
+  return packagesByProductId.get(productId);
+}
+
+export function getIapFormattedPrice(productId: string, fallback = ''): string {
+  return packagesByProductId.get(productId)?.product.priceString ?? fallback;
+}
+
+export function isProProductId(productId: string): boolean {
+  return proProductIds.includes(productId);
+}
+
+export function getPackProductIdToNameMap(): Record<string, string> {
+  return packProductIdToPackName;
+}
+
+export function hasActiveProEntitlement(customerInfo: CustomerInfo): boolean {
+  return Boolean(customerInfo.entitlements.active[PRO_ENTITLEMENT_ID]);
+}
+
+export function isPurchaseCancelledError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') {
+    return false;
+  }
+  const maybe = err as { code?: string; userCancelled?: boolean | null };
+  if (maybe.userCancelled === true) {
+    return true;
+  }
+  return maybe.code === PURCHASES_ERROR_CODE.PURCHASE_CANCELLED_ERROR;
+}
+
+/** Fetch RevenueCat offerings and cache packages by store product ID. */
+export async function fetchOfferingsAndCache(): Promise<void> {
+  if (!isIapSupported()) {
     return;
   }
 
-  if (!connected) {
-    await InAppPurchases.connectAsync();
-    connected = true;
+  const offerings = await Purchases.getOfferings();
+  packagesByProductId.clear();
+
+  const packages: PurchasesPackage[] = [];
+  if (offerings.current?.availablePackages?.length) {
+    packages.push(...offerings.current.availablePackages);
   }
-
-  if (!listenerRegistered) {
-    InAppPurchases.setPurchaseListener(({ responseCode, results, errorCode }) => {
-      void (async () => {
-        if (responseCode === InAppPurchases.IAPResponseCode.USER_CANCELED) {
-          onPurchaseSettled?.({
-            success: false,
-            productId: pendingPurchase?.productId ?? '',
-            message: 'Purchase canceled',
-          });
-          pendingPurchase = null;
-          return;
-        }
-
-        if (responseCode !== InAppPurchases.IAPResponseCode.OK || !results?.length) {
-          onPurchaseSettled?.({
-            success: false,
-            productId: pendingPurchase?.productId ?? '',
-            message: `Purchase failed${errorCode != null ? ` (${errorCode})` : ''}`,
-          });
-          pendingPurchase = null;
-          return;
-        }
-
-        for (const purchase of results) {
-          if (purchase.purchaseState !== InAppPurchases.InAppPurchaseState.PURCHASED) {
-            continue;
-          }
-          if (purchase.acknowledged) {
-            continue;
-          }
-
-          const ctx = pendingPurchase;
-          try {
-            await fulfillPurchase(purchase.productId, ctx?.coupleId ?? null, ctx?.userId ?? null);
-            await InAppPurchases.finishTransactionAsync(purchase, true);
-            onPurchaseSettled?.({
-              success: true,
-              productId: purchase.productId,
-              message: 'Purchase successful',
-            });
-          } catch (err) {
-            const message = err instanceof Error ? err.message : 'Could not complete purchase';
-            onPurchaseSettled?.({ success: false, productId: purchase.productId, message });
-          }
-        }
-        pendingPurchase = null;
-      })();
-    });
-    listenerRegistered = true;
-  }
-
-  const { responseCode, results } = await InAppPurchases.getProductsAsync(productIds);
-  if (responseCode === InAppPurchases.IAPResponseCode.OK && results) {
-    productsById.clear();
-    for (const item of results) {
-      productsById.set(item.productId, item);
+  for (const offering of Object.values(offerings.all ?? {})) {
+    if (offering?.availablePackages?.length) {
+      packages.push(...offering.availablePackages);
     }
+  }
+
+  for (const pkg of packages) {
+    packagesByProductId.set(pkg.product.identifier, pkg);
   }
 }
 
-export async function startIapPurchase(
+/**
+ * Purchase a product via its RevenueCat package, then fulfill in Supabase.
+ * Throws on genuine errors; callers should treat cancel via isPurchaseCancelledError.
+ */
+export async function purchaseProductById(
   productId: string,
   coupleId: string,
   userId: string
-): Promise<void> {
+): Promise<CustomerInfo> {
   if (!isIapSupported()) {
     throw new Error('In-app purchases are only available on iOS and Android.');
   }
-  if (!connected) {
-    throw new Error('Store is not ready yet. Please try again in a moment.');
-  }
-  if (!productsById.has(productId)) {
-    throw new Error('This product is not available in the App Store yet.');
+
+  const aPackage = packagesByProductId.get(productId);
+  if (!aPackage) {
+    throw new Error('This product is not available yet. Please try again in a moment.');
   }
 
-  pendingPurchase = { productId, coupleId, userId };
-  await InAppPurchases.purchaseItemAsync(productId);
+  const { customerInfo } = await Purchases.purchasePackage(aPackage);
+  await fulfillPurchase(productId, coupleId, userId, customerInfo);
+  return customerInfo;
 }
 
 export async function restoreIapPurchases(
   coupleId: string,
   userId: string,
-  proProductIds: string[],
-  packProductIdToPackName: Record<string, string>
+  _proProductIds: string[] = proProductIds,
+  _packProductIdToPackName: Record<string, string> = packProductIdToPackName
 ): Promise<{ restoredPro: boolean; restoredPackCount: number }> {
   if (!isIapSupported()) {
     return { restoredPro: false, restoredPackCount: 0 };
   }
-  if (!connected) {
-    await InAppPurchases.connectAsync();
-    connected = true;
+
+  const customerInfo = await Purchases.restorePurchases();
+  return unlockFromCustomerInfo(customerInfo, coupleId, userId);
+}
+
+/** Sync `couples.is_pro` from RevenueCat entitlements. */
+export async function syncProFromCustomerInfo(coupleId: string): Promise<boolean | null> {
+  if (!isIapSupported()) {
+    return null;
   }
 
-  const { responseCode, results } = await InAppPurchases.getPurchaseHistoryAsync();
-  if (responseCode !== InAppPurchases.IAPResponseCode.OK || !results?.length) {
-    return { restoredPro: false, restoredPackCount: 0 };
+  try {
+    const customerInfo = await Purchases.getCustomerInfo();
+    const isPro = hasActiveProEntitlement(customerInfo);
+    await setCouplePro(coupleId, isPro);
+    return isPro;
+  } catch {
+    return null;
   }
+}
 
+/** @deprecated Prefer syncProFromCustomerInfo — kept for call-site compatibility. */
+export async function syncProFromPurchaseHistory(
+  coupleId: string,
+  _proProductIds: string[]
+): Promise<boolean | null> {
+  return syncProFromCustomerInfo(coupleId);
+}
+
+async function unlockFromCustomerInfo(
+  customerInfo: CustomerInfo,
+  coupleId: string,
+  userId: string
+): Promise<{ restoredPro: boolean; restoredPackCount: number }> {
   let restoredPro = false;
   let restoredPackCount = 0;
 
-  for (const purchase of results) {
-    if (purchase.purchaseState !== InAppPurchases.InAppPurchaseState.PURCHASED) {
-      continue;
-    }
+  if (hasActiveProEntitlement(customerInfo)) {
+    await setCouplePro(coupleId, true);
+    restoredPro = true;
+  }
 
-    if (proProductIds.includes(purchase.productId)) {
-      await setCouplePro(coupleId, true);
-      restoredPro = true;
-      if (!purchase.acknowledged) {
-        await InAppPurchases.finishTransactionAsync(purchase, false);
+  const purchasedIds = new Set(customerInfo.allPurchasedProductIdentifiers ?? []);
+  for (const productId of purchasedIds) {
+    if (proProductIds.includes(productId)) {
+      if (!restoredPro) {
+        await setCouplePro(coupleId, true);
+        restoredPro = true;
       }
       continue;
     }
 
-    const packName = packProductIdToPackName[purchase.productId];
+    const packName = packProductIdToPackName[productId];
     if (packName) {
       const unlocked = await unlockPackForCouple(coupleId, userId, packName);
       if (unlocked) {
         restoredPackCount += 1;
-      }
-      if (!purchase.acknowledged) {
-        await InAppPurchases.finishTransactionAsync(purchase, true);
       }
     }
   }
@@ -180,45 +183,18 @@ export async function restoreIapPurchases(
   return { restoredPro, restoredPackCount };
 }
 
-/** Syncs `couples.is_pro` from App Store / Play purchase history. No-op if the store query fails. */
-export async function syncProFromPurchaseHistory(
-  coupleId: string,
-  proProductIds: string[]
-): Promise<boolean | null> {
-  if (!isIapSupported() || !connected) {
-    return null;
-  }
-
-  const { responseCode, results } = await InAppPurchases.getPurchaseHistoryAsync();
-  if (responseCode !== InAppPurchases.IAPResponseCode.OK) {
-    return null;
-  }
-
-  const hasActivePro = (results ?? []).some(
-    (p) =>
-      proProductIds.includes(p.productId) &&
-      p.purchaseState === InAppPurchases.InAppPurchaseState.PURCHASED
-  );
-
-  await setCouplePro(coupleId, hasActivePro);
-  return hasActivePro;
-}
-
 async function fulfillPurchase(
   productId: string,
-  coupleId: string | null,
-  userId: string | null
+  coupleId: string,
+  userId: string,
+  customerInfo?: CustomerInfo
 ): Promise<void> {
-  if (!coupleId || !userId) {
-    throw new Error('Missing couple context for this purchase.');
-  }
-
-  if (isProProductId(productId)) {
+  if (isProProductId(productId) || (customerInfo && hasActiveProEntitlement(customerInfo))) {
     await setCouplePro(coupleId, true);
     return;
   }
 
-  const packName = getPackNameForProductId(productId);
+  const packName = packProductIdToPackName[productId];
   if (!packName) {
     throw new Error('Unknown pack product.');
   }
@@ -298,28 +274,4 @@ async function unlockPackForCouple(
   }
 
   return Boolean(couplePackId);
-}
-
-/** Set by App.tsx after constants are defined. */
-let proProductIds: string[] = [];
-let packProductIdToPackName: Record<string, string> = {};
-
-export function configureIapProductMaps(
-  proIds: string[],
-  packIdToName: Record<string, string>
-): void {
-  proProductIds = proIds;
-  packProductIdToPackName = packIdToName;
-}
-
-export function isProProductId(productId: string): boolean {
-  return proProductIds.includes(productId);
-}
-
-function getPackNameForProductId(productId: string): string | undefined {
-  return packProductIdToPackName[productId];
-}
-
-export function getPackProductIdToNameMap(): Record<string, string> {
-  return packProductIdToPackName;
 }

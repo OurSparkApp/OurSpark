@@ -40,6 +40,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import Purchases, { LOG_LEVEL } from 'react-native-purchases';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Session } from '@supabase/supabase-js';
 import {
@@ -53,15 +54,15 @@ import { awardVaultKeeperIfFirstSave, checkAndAwardBadges } from './lib/badges';
 import { scheduledDateMatchesTodayMonthDay } from './lib/scheduledQuestion';
 import {
   configureIapProductMaps,
-  connectAndLoadProducts,
+  fetchOfferingsAndCache,
   getIapFormattedPrice,
   getPackProductIdToNameMap,
   isIapSupported,
   isProProductId,
+  isPurchaseCancelledError,
+  purchaseProductById,
   restoreIapPurchases,
-  setIapPurchaseSettledHandler,
-  startIapPurchase,
-  syncProFromPurchaseHistory,
+  syncProFromCustomerInfo,
 } from './lib/iap';
 import { supabase } from './lib/supabase';
 
@@ -82,8 +83,6 @@ const IAP_PRODUCT_IDS = {
 } as const;
 
 const PRO_IAP_PRODUCT_IDS = [IAP_PRODUCT_IDS.proMonthly, IAP_PRODUCT_IDS.proAnnual];
-
-const ALL_IAP_PRODUCT_IDS = Object.values(IAP_PRODUCT_IDS);
 
 /** Maps App Store product IDs to `packs.name` in Supabase. */
 const IAP_PACK_PRODUCT_ID_TO_PACK_NAME: Record<string, string> = {
@@ -4535,10 +4534,12 @@ function PacksScreen({
   userId,
   onPurchase,
   getIapPrice,
+  onRestorePurchases,
 }: {
   userId: string;
   onPurchase: (productId: string, coupleId: string, userId: string) => Promise<void>;
   getIapPrice: (productId: string, fallback?: string) => string;
+  onRestorePurchases: (coupleId: string, userId: string) => Promise<void>;
 }) {
   const { width: screenWidth } = useWindowDimensions();
   const packCardWidth = (screenWidth - 48) / 2;
@@ -4878,6 +4879,16 @@ function PacksScreen({
             <ActivityIndicator size="small" color={ORANGE} />
           </View>
         ) : null}
+
+        {coupleId ? (
+          <TouchableOpacity
+            activeOpacity={0.7}
+            style={styles.packsRestoreBtn}
+            onPress={() => void onRestorePurchases(coupleId, currentUserId)}
+          >
+            <Text style={styles.packsRestoreBtnText}>Restore Purchases</Text>
+          </TouchableOpacity>
+        ) : null}
       </ScrollView>
 
       <Modal
@@ -4999,12 +5010,14 @@ function MainTabs({
   onPurchase,
   onOpenSubscriptionPlans,
   getIapPrice,
+  onRestorePurchases,
   onNavigateToPartnerSetup,
 }: {
   userId: string;
   onPurchase: (productId: string, coupleId: string, userId: string) => Promise<void>;
   onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
   getIapPrice: (productId: string, fallback?: string) => string;
+  onRestorePurchases: (coupleId: string, userId: string) => Promise<void>;
   onNavigateToPartnerSetup: () => void;
 }) {
   return (
@@ -5059,7 +5072,12 @@ function MainTabs({
         }}
       >
         {() => (
-          <PacksScreen userId={userId} onPurchase={onPurchase} getIapPrice={getIapPrice} />
+          <PacksScreen
+            userId={userId}
+            onPurchase={onPurchase}
+            getIapPrice={getIapPrice}
+            onRestorePurchases={onRestorePurchases}
+          />
         )}
       </Tab.Screen>
       <Tab.Screen
@@ -5314,53 +5332,26 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (!isIapSupported()) {
-      return;
-    }
-
     let cancelled = false;
-    const IAP_INIT_TIMEOUT_MS = 5000;
 
     void (async () => {
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([
-          connectAndLoadProducts(ALL_IAP_PRODUCT_IDS),
-          new Promise<never>((_, reject) => {
-            timeoutId = setTimeout(() => reject(new Error('IAP init timeout')), IAP_INIT_TIMEOUT_MS);
-          }),
-        ]);
+        Purchases.setLogLevel(LOG_LEVEL.INFO);
+        Purchases.configure({
+          apiKey: 'test_BSpZisJDEsmfLEhzfSBAvmFpCLi',
+        });
+        await fetchOfferingsAndCache();
         if (!cancelled) {
           setIapReady(true);
           setIapPricesVersion((v) => v + 1);
         }
-      } catch {
-        // IAP unavailable or timed out — app continues without the store
-      } finally {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
+      } catch (err) {
+        console.warn('RevenueCat init failed', err);
       }
     })();
 
-    setIapPurchaseSettledHandler((result) => {
-      setMainTabsRefreshKey((k) => k + 1);
-      if (result.success) {
-        if (isProProductId(result.productId)) {
-          setPurchaseToast('Welcome to Pro! Everything is now unlocked for both of you.');
-          Alert.alert('Welcome to Pro!', 'Everything is now unlocked for both of you.');
-        } else {
-          setPurchaseToast('Pack unlocked! Head to your Packs tab to start.');
-          Alert.alert('Pack unlocked!', 'Head to your Packs tab to start.');
-        }
-      } else if (result.message !== 'Purchase canceled') {
-        Alert.alert('Purchase failed', result.message);
-      }
-    });
-
     return () => {
       cancelled = true;
-      setIapPurchaseSettledHandler(null);
     };
   }, []);
 
@@ -5372,7 +5363,7 @@ export default function App() {
     if (!coupleId) {
       return;
     }
-    await syncProFromPurchaseHistory(coupleId, PRO_IAP_PRODUCT_IDS);
+    await syncProFromCustomerInfo(coupleId);
     setMainTabsRefreshKey((k) => k + 1);
   }, [iapReady]);
 
@@ -5394,49 +5385,70 @@ export default function App() {
         return;
       }
       try {
-        await startIapPurchase(productId, coupleId, userId);
+        await purchaseProductById(productId, coupleId, userId);
+        setMainTabsRefreshKey((k) => k + 1);
+        if (isProProductId(productId)) {
+          setShowPlanPicker(false);
+          setPurchaseToast('Welcome to Pro! Everything is now unlocked for both of you.');
+          Alert.alert('Welcome to Pro!', 'Everything is now unlocked for both of you.');
+        } else {
+          setPurchaseToast('Pack unlocked! Head to Today to get started.');
+          Alert.alert('Pack unlocked!', 'Your pack is active. Heading to Today.');
+          if (navigationRef.isReady()) {
+            navigationRef.navigate('Question');
+          }
+        }
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Payment failed';
-        Alert.alert('Purchase failed', message);
+        if (isPurchaseCancelledError(err)) {
+          return;
+        }
+        Alert.alert('Purchase failed. Please try again.');
       }
     },
     [iapReady]
   );
 
-  const handleRestorePurchases = useCallback(async () => {
-    if (!planPickerCoupleId || !planPickerUserId) {
-      return;
-    }
-    if (!isIapSupported() || !iapReady) {
-      Alert.alert('Unavailable', 'Restore is only available in the iOS app.');
-      return;
-    }
-    try {
-      const { restoredPro, restoredPackCount } = await restoreIapPurchases(
-        planPickerCoupleId,
-        planPickerUserId,
-        PRO_IAP_PRODUCT_IDS,
-        getPackProductIdToNameMap()
-      );
-      setMainTabsRefreshKey((k) => k + 1);
-      if (restoredPro || restoredPackCount > 0) {
-        const parts: string[] = [];
-        if (restoredPro) {
-          parts.push('Pro subscription');
-        }
-        if (restoredPackCount > 0) {
-          parts.push(`${restoredPackCount} pack${restoredPackCount === 1 ? '' : 's'}`);
-        }
-        Alert.alert('Restored', `Successfully restored: ${parts.join(' and ')}.`);
-        setPurchaseToast('Your purchases have been restored.');
-      } else {
-        Alert.alert('No purchases found', 'We could not find previous purchases for this Apple ID.');
+  const handleRestorePurchases = useCallback(
+    async (coupleId?: string | null, userId?: string | null) => {
+      const cid = coupleId ?? planPickerCoupleId;
+      const uid = userId ?? planPickerUserId ?? currentUserId;
+      if (!cid || !uid) {
+        return;
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not restore purchases';
-      Alert.alert('Restore failed', message);
-    }
-  }, [iapReady, planPickerCoupleId, planPickerUserId]);
+      if (!isIapSupported() || !iapReady) {
+        Alert.alert('Unavailable', 'Restore is only available in the iOS app.');
+        return;
+      }
+      try {
+        const { restoredPro, restoredPackCount } = await restoreIapPurchases(
+          cid,
+          uid,
+          PRO_IAP_PRODUCT_IDS,
+          getPackProductIdToNameMap()
+        );
+        setMainTabsRefreshKey((k) => k + 1);
+        if (restoredPro || restoredPackCount > 0) {
+          const parts: string[] = [];
+          if (restoredPro) {
+            parts.push('Pro subscription');
+          }
+          if (restoredPackCount > 0) {
+            parts.push(`${restoredPackCount} pack${restoredPackCount === 1 ? '' : 's'}`);
+          }
+          Alert.alert('Restored', `Successfully restored: ${parts.join(' and ')}.`);
+          setPurchaseToast('Your purchases have been restored.');
+        } else {
+          Alert.alert('No purchases found', 'We could not find previous purchases for this Apple ID.');
+        }
+      } catch (err) {
+        if (isPurchaseCancelledError(err)) {
+          return;
+        }
+        Alert.alert('Purchase failed. Please try again.');
+      }
+    },
+    [currentUserId, iapReady, planPickerCoupleId, planPickerUserId]
+  );
 
   const openSubscriptionPlans = useCallback((coupleId: string, userId: string) => {
     setPlanPickerCoupleId(coupleId);
@@ -5553,6 +5565,7 @@ export default function App() {
             onPurchase={handlePurchase}
             onOpenSubscriptionPlans={openSubscriptionPlans}
             getIapPrice={getIapPrice}
+            onRestorePurchases={(coupleId, userId) => handleRestorePurchases(coupleId, userId)}
             onNavigateToPartnerSetup={() => {
               setInviteFromMainNav(true);
               setAppStage('invite');
@@ -7919,6 +7932,19 @@ const styles = StyleSheet.create({
   packsLoadingWrap: {
     paddingVertical: 20,
     alignItems: 'center',
+  },
+  packsRestoreBtn: {
+    alignSelf: 'center',
+    paddingVertical: 20,
+    paddingHorizontal: 16,
+    marginBottom: 28,
+  },
+  packsRestoreBtnText: {
+    fontFamily: FONT_BODY,
+    fontSize: 14,
+    color: `${TEXT}99`,
+    textAlign: 'center',
+    textDecorationLine: 'underline',
   },
   pauseOverlay: {
     flex: 1,
