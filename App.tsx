@@ -5368,6 +5368,9 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (Platform.OS === 'ios' && Platform.isPad) {
+      return;
+    }
     const timer = setTimeout(() => {
       try {
         Purchases.configure({
