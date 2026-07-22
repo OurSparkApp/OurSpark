@@ -1,18 +1,16 @@
 import { Platform } from 'react-native';
 import { supabase } from './supabase';
 
+export const PRO_ENTITLEMENT_ID = 'OurSpark Pro';
+
 type CustomerInfo = {
   entitlements: { active: Record<string, unknown> };
   allPurchasedProductIdentifiers?: string[];
 };
+
 type PurchasesPackage = {
   product: { identifier: string; priceString: string };
 };
-
-export const PRO_ENTITLEMENT_ID = 'OurSpark Pro';
-
-/** Matches RevenueCat PURCHASES_ERROR_CODE.PURCHASE_CANCELLED_ERROR without a runtime import. */
-const PURCHASE_CANCELLED_ERROR_CODE = '1';
 
 export type PendingIapPurchase = {
   productId: string;
@@ -25,6 +23,8 @@ const packagesByProductId = new Map<string, PurchasesPackage>();
 /** Set by App.tsx after constants are defined. */
 let proProductIds: string[] = [];
 let packProductIdToPackName: Record<string, string> = {};
+
+const PURCHASES_UNAVAILABLE = 'Purchases not available';
 
 export function configureIapProductMaps(
   proIds: string[],
@@ -58,106 +58,37 @@ export function hasActiveProEntitlement(customerInfo: CustomerInfo): boolean {
   return Boolean(customerInfo.entitlements.active[PRO_ENTITLEMENT_ID]);
 }
 
-export function isPurchaseCancelledError(err: unknown): boolean {
-  if (!err || typeof err !== 'object') {
-    return false;
-  }
-  const maybe = err as { code?: string; userCancelled?: boolean | null };
-  if (maybe.userCancelled === true) {
-    return true;
-  }
-  return maybe.code === PURCHASE_CANCELLED_ERROR_CODE;
+export function isPurchaseCancelledError(_err: unknown): boolean {
+  return false;
 }
 
-/** Fetch RevenueCat offerings and cache packages by store product ID. */
+/** Purchases temporarily unavailable — RevenueCat removed. */
 export async function fetchOfferingsAndCache(): Promise<void> {
-  if (Platform.OS !== 'ios' || Platform.isPad) return;
-  const { default: Purchases } = await import('react-native-purchases');
-
-  if (!isIapSupported()) {
-    return;
-  }
-
-  const offerings = await Purchases.getOfferings();
-  packagesByProductId.clear();
-
-  const packages: PurchasesPackage[] = [];
-  if (offerings.current?.availablePackages?.length) {
-    packages.push(...offerings.current.availablePackages);
-  }
-  for (const offering of Object.values(offerings.all ?? {})) {
-    if (offering?.availablePackages?.length) {
-      packages.push(...offering.availablePackages);
-    }
-  }
-
-  for (const pkg of packages) {
-    packagesByProductId.set(pkg.product.identifier, pkg);
-  }
+  throw new Error(PURCHASES_UNAVAILABLE);
 }
 
-/**
- * Purchase a product via its RevenueCat package, then fulfill in Supabase.
- * Throws on genuine errors; callers should treat cancel via isPurchaseCancelledError.
- */
+/** Purchases temporarily unavailable — RevenueCat removed. */
 export async function purchaseProductById(
-  productId: string,
-  coupleId: string,
-  userId: string
+  _productId: string,
+  _coupleId: string,
+  _userId: string
 ): Promise<CustomerInfo> {
-  if (Platform.OS !== 'ios' || Platform.isPad) {
-    throw new Error('In-app purchases are only available on iOS and Android.');
-  }
-  const { default: Purchases } = await import('react-native-purchases');
-
-  if (!isIapSupported()) {
-    throw new Error('In-app purchases are only available on iOS and Android.');
-  }
-
-  const aPackage = packagesByProductId.get(productId);
-  if (!aPackage) {
-    throw new Error('This product is not available yet. Please try again in a moment.');
-  }
-
-  const { customerInfo } = await Purchases.purchasePackage(aPackage as never);
-  await fulfillPurchase(productId, coupleId, userId, customerInfo as CustomerInfo);
-  return customerInfo as CustomerInfo;
+  throw new Error(PURCHASES_UNAVAILABLE);
 }
 
+/** Purchases temporarily unavailable — RevenueCat removed. */
 export async function restoreIapPurchases(
-  coupleId: string,
-  userId: string,
+  _coupleId: string,
+  _userId: string,
   _proProductIds: string[] = proProductIds,
   _packProductIdToPackName: Record<string, string> = packProductIdToPackName
 ): Promise<{ restoredPro: boolean; restoredPackCount: number }> {
-  if (Platform.OS !== 'ios' || Platform.isPad) return { restoredPro: false, restoredPackCount: 0 };
-  const { default: Purchases } = await import('react-native-purchases');
-
-  if (!isIapSupported()) {
-    return { restoredPro: false, restoredPackCount: 0 };
-  }
-
-  const customerInfo = await Purchases.restorePurchases();
-  return unlockFromCustomerInfo(customerInfo, coupleId, userId);
+  throw new Error(PURCHASES_UNAVAILABLE);
 }
 
-/** Sync `couples.is_pro` from RevenueCat entitlements. */
-export async function syncProFromCustomerInfo(coupleId: string): Promise<boolean | null> {
-  if (Platform.OS !== 'ios' || Platform.isPad) return null;
-  const { default: Purchases } = await import('react-native-purchases');
-
-  if (!isIapSupported()) {
-    return null;
-  }
-
-  try {
-    const customerInfo = await Purchases.getCustomerInfo();
-    const isPro = hasActiveProEntitlement(customerInfo);
-    await setCouplePro(coupleId, isPro);
-    return isPro;
-  } catch {
-    return null;
-  }
+/** Purchases temporarily unavailable — RevenueCat removed. */
+export async function syncProFromCustomerInfo(_coupleId: string): Promise<boolean | null> {
+  throw new Error(PURCHASES_UNAVAILABLE);
 }
 
 /** @deprecated Prefer syncProFromCustomerInfo — kept for call-site compatibility. */
@@ -168,130 +99,9 @@ export async function syncProFromPurchaseHistory(
   return syncProFromCustomerInfo(coupleId);
 }
 
-async function unlockFromCustomerInfo(
-  customerInfo: CustomerInfo,
-  coupleId: string,
-  userId: string
-): Promise<{ restoredPro: boolean; restoredPackCount: number }> {
-  let restoredPro = false;
-  let restoredPackCount = 0;
-
-  if (hasActiveProEntitlement(customerInfo)) {
-    await setCouplePro(coupleId, true);
-    restoredPro = true;
-  }
-
-  const purchasedIds = new Set(customerInfo.allPurchasedProductIdentifiers ?? []);
-  for (const productId of purchasedIds) {
-    if (proProductIds.includes(productId)) {
-      if (!restoredPro) {
-        await setCouplePro(coupleId, true);
-        restoredPro = true;
-      }
-      continue;
-    }
-
-    const packName = packProductIdToPackName[productId];
-    if (packName) {
-      const unlocked = await unlockPackForCouple(coupleId, userId, packName);
-      if (unlocked) {
-        restoredPackCount += 1;
-      }
-    }
-  }
-
-  return { restoredPro, restoredPackCount };
-}
-
-async function fulfillPurchase(
-  productId: string,
-  coupleId: string,
-  userId: string,
-  customerInfo?: CustomerInfo
-): Promise<void> {
-  if (isProProductId(productId) || (customerInfo && hasActiveProEntitlement(customerInfo))) {
-    await setCouplePro(coupleId, true);
-    return;
-  }
-
-  const packName = packProductIdToPackName[productId];
-  if (!packName) {
-    throw new Error('Unknown pack product.');
-  }
-
-  const unlocked = await unlockPackForCouple(coupleId, userId, packName);
-  if (!unlocked) {
-    throw new Error('Could not unlock pack for your couple.');
-  }
-}
-
 export async function setCouplePro(coupleId: string, isPro: boolean): Promise<void> {
   const { error } = await supabase.from('couples').update({ is_pro: isPro }).eq('id', coupleId);
   if (error) {
     throw new Error(error.message);
   }
-}
-
-async function unlockPackForCouple(
-  coupleId: string,
-  userId: string,
-  packName: string
-): Promise<boolean> {
-  const { data: packRow } = await supabase.from('packs').select('id').eq('name', packName).maybeSingle();
-  if (!packRow?.id) {
-    return false;
-  }
-
-  const packId = String(packRow.id);
-  const { data: existing } = await supabase
-    .from('couple_packs')
-    .select('id, status')
-    .eq('couple_id', coupleId)
-    .eq('pack_id', packId)
-    .maybeSingle();
-
-  let couplePackId: string | null = existing?.id != null ? String(existing.id) : null;
-
-  if (existing?.id) {
-    const { data, error } = await supabase
-      .from('couple_packs')
-      .update({
-        status: 'active',
-        current_day: 1,
-        activated_by: userId,
-        activated_at: new Date().toISOString(),
-        paused_at: null,
-      })
-      .eq('id', existing.id)
-      .select('id')
-      .maybeSingle();
-    if (error) {
-      return false;
-    }
-    couplePackId = data?.id != null ? String(data.id) : couplePackId;
-  } else {
-    const { data, error } = await supabase
-      .from('couple_packs')
-      .insert({
-        couple_id: coupleId,
-        pack_id: packId,
-        status: 'active',
-        current_day: 1,
-        activated_by: userId,
-        activated_at: new Date().toISOString(),
-        paused_at: null,
-      })
-      .select('id')
-      .maybeSingle();
-    if (error) {
-      return false;
-    }
-    couplePackId = data?.id != null ? String(data.id) : null;
-  }
-
-  if (couplePackId) {
-    await supabase.from('couples').update({ active_pack_id: couplePackId }).eq('id', coupleId);
-  }
-
-  return Boolean(couplePackId);
 }

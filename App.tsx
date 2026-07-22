@@ -53,15 +53,7 @@ import { awardVaultKeeperIfFirstSave, checkAndAwardBadges } from './lib/badges';
 import { scheduledDateMatchesTodayMonthDay } from './lib/scheduledQuestion';
 import {
   configureIapProductMaps,
-  fetchOfferingsAndCache,
   getIapFormattedPrice,
-  getPackProductIdToNameMap,
-  isIapSupported,
-  isProProductId,
-  isPurchaseCancelledError,
-  purchaseProductById,
-  restoreIapPurchases,
-  syncProFromCustomerInfo,
 } from './lib/iap';
 import { supabase } from './lib/supabase';
 
@@ -4963,29 +4955,15 @@ function PacksScreen({
               {!selectedOwned ? (
                 <TouchableOpacity
                   activeOpacity={0.9}
-                  disabled={offeringsStatus !== 'ready'}
-                  style={[
-                    styles.packDetailPrimaryBtn,
-                    offeringsStatus !== 'ready' ? styles.packDetailPrimaryBtnDisabled : null,
-                  ]}
+                  disabled
+                  style={[styles.packDetailPrimaryBtn, styles.packDetailPrimaryBtnDisabled]}
                   onPress={() => {
-                    if (offeringsStatus !== 'ready') {
-                      return;
-                    }
-                    if (selectedPack.iapProductId && coupleId) {
-                      void onPurchase(selectedPack.iapProductId, coupleId, userId);
-                    } else {
-                      Alert.alert('Unavailable', 'This pack is not available for purchase yet.');
-                    }
+                    Alert.alert('Coming soon', 'In-app purchases will be available soon.');
                   }}
                 >
-                  {offeringsStatus === 'loading' ? (
-                    <ActivityIndicator size="small" color={selectedPack.color} />
-                  ) : (
-                    <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>
-                      Get This Pack
-                    </Text>
-                  )}
+                  <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>
+                    Coming soon
+                  </Text>
                 </TouchableOpacity>
               ) : selectedIsPaused ? (
                 <>
@@ -5367,131 +5345,37 @@ export default function App() {
   );
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      void (async () => {
-        if (Platform.OS === 'ios' && !Platform.isPad) {
-          try {
-            const { default: Purchases } = await import('react-native-purchases');
-            Purchases.configure({
-              apiKey: 'appl_RlJXYiZtXubiCKuvWKCkNBdlIWm',
-            });
-            setIapReady(true);
-          } catch (err) {
-            console.warn('RevenueCat init failed', err);
-          }
-        }
-      })();
-    }, 0);
-    return () => clearTimeout(timer);
+    // Purchases temporarily unavailable — RevenueCat removed.
   }, []);
 
   const loadIapOfferings = useCallback(async (): Promise<boolean> => {
-    try {
-      const offeringsPromise = fetchOfferingsAndCache();
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 5000)
-      );
-      await Promise.race([offeringsPromise, timeoutPromise]);
-      setIapPricesVersion((v) => v + 1);
-      return true;
-    } catch {
-      return false;
-    }
+    // Purchases temporarily unavailable — skip store fetch.
+    return true;
   }, []);
 
-  const syncSubscriptionForUser = useCallback(async (userId: string) => {
-    if (!isIapSupported() || !iapReady) {
-      return;
-    }
-    const coupleId = await getProfileCoupleId(userId);
-    if (!coupleId) {
-      return;
-    }
-    await syncProFromCustomerInfo(coupleId);
-    setMainTabsRefreshKey((k) => k + 1);
-  }, [iapReady]);
+  const syncSubscriptionForUser = useCallback(async (_userId: string) => {
+    // Purchases temporarily unavailable — RevenueCat removed.
+  }, []);
 
   useEffect(() => {
-    if (!iapReady || !currentUserId || appStage !== 'main') {
+    if (!currentUserId || appStage !== 'main') {
       return;
     }
     void syncSubscriptionForUser(currentUserId);
-  }, [appStage, currentUserId, iapReady, syncSubscriptionForUser]);
+  }, [appStage, currentUserId, syncSubscriptionForUser]);
 
   const handlePurchase = useCallback(
-    async (productId: string, coupleId: string, userId: string) => {
-      if (!isIapSupported()) {
-        Alert.alert('Unavailable', 'In-app purchases are only available in the iOS app.');
-        return;
-      }
-      if (!iapReady) {
-        Alert.alert('Store loading', 'The App Store is still loading. Please try again in a moment.');
-        return;
-      }
-      try {
-        await purchaseProductById(productId, coupleId, userId);
-        setMainTabsRefreshKey((k) => k + 1);
-        if (isProProductId(productId)) {
-          setShowPlanPicker(false);
-          setPurchaseToast('Welcome to Pro! Everything is now unlocked for both of you.');
-          Alert.alert('Welcome to Pro!', 'Everything is now unlocked for both of you.');
-        } else {
-          setPurchaseToast('Pack unlocked! Head to Today to get started.');
-          Alert.alert('Pack unlocked!', 'Your pack is active. Heading to Today.');
-          if (navigationRef.isReady()) {
-            navigationRef.navigate('Question');
-          }
-        }
-      } catch (err) {
-        if (isPurchaseCancelledError(err)) {
-          return;
-        }
-        Alert.alert('Purchase failed. Please try again.');
-      }
+    async (_productId: string, _coupleId: string, _userId: string) => {
+      Alert.alert('Coming soon', 'In-app purchases will be available soon.');
     },
-    [iapReady]
+    []
   );
 
   const handleRestorePurchases = useCallback(
-    async (coupleId?: string | null, userId?: string | null) => {
-      const cid = coupleId ?? planPickerCoupleId;
-      const uid = userId ?? planPickerUserId ?? currentUserId;
-      if (!cid || !uid) {
-        return;
-      }
-      if (!isIapSupported() || !iapReady) {
-        Alert.alert('Unavailable', 'Restore is only available in the iOS app.');
-        return;
-      }
-      try {
-        const { restoredPro, restoredPackCount } = await restoreIapPurchases(
-          cid,
-          uid,
-          PRO_IAP_PRODUCT_IDS,
-          getPackProductIdToNameMap()
-        );
-        setMainTabsRefreshKey((k) => k + 1);
-        if (restoredPro || restoredPackCount > 0) {
-          const parts: string[] = [];
-          if (restoredPro) {
-            parts.push('Pro subscription');
-          }
-          if (restoredPackCount > 0) {
-            parts.push(`${restoredPackCount} pack${restoredPackCount === 1 ? '' : 's'}`);
-          }
-          Alert.alert('Restored', `Successfully restored: ${parts.join(' and ')}.`);
-          setPurchaseToast('Your purchases have been restored.');
-        } else {
-          Alert.alert('No purchases found', 'We could not find previous purchases for this Apple ID.');
-        }
-      } catch (err) {
-        if (isPurchaseCancelledError(err)) {
-          return;
-        }
-        Alert.alert('Purchase failed. Please try again.');
-      }
+    async (_coupleId?: string | null, _userId?: string | null) => {
+      Alert.alert('Coming soon', 'In-app purchases will be available soon.');
     },
-    [currentUserId, iapReady, planPickerCoupleId, planPickerUserId]
+    []
   );
 
   const openSubscriptionPlans = useCallback((coupleId: string, userId: string) => {
@@ -5727,40 +5611,24 @@ export default function App() {
                 </View>
                 <TouchableOpacity
                   activeOpacity={0.9}
-                  style={styles.planPickerMonthlyBtn}
+                  disabled
+                  style={[styles.planPickerMonthlyBtn, { opacity: 0.5 }]}
                   onPress={() => {
-                    if (planPickerCoupleId && planPickerUserId) {
-                      void handlePurchase(
-                        IAP_PRODUCT_IDS.proMonthly,
-                        planPickerCoupleId,
-                        planPickerUserId
-                      );
-                    }
-                    setShowPlanPicker(false);
+                    Alert.alert('Coming soon', 'In-app purchases will be available soon.');
                   }}
                 >
-                  <Text style={styles.planPickerMonthlyBtnText}>
-                    Monthly · {getIapPrice(IAP_PRODUCT_IDS.proMonthly, 'Subscribe')}
-                  </Text>
+                  <Text style={styles.planPickerMonthlyBtnText}>Monthly · Coming soon</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   activeOpacity={0.9}
-                  style={styles.planPickerAnnualBtn}
+                  disabled
+                  style={[styles.planPickerAnnualBtn, { opacity: 0.5 }]}
                   onPress={() => {
-                    if (planPickerCoupleId && planPickerUserId) {
-                      void handlePurchase(
-                        IAP_PRODUCT_IDS.proAnnual,
-                        planPickerCoupleId,
-                        planPickerUserId
-                      );
-                    }
-                    setShowPlanPicker(false);
+                    Alert.alert('Coming soon', 'In-app purchases will be available soon.');
                   }}
                 >
-                  <Text style={styles.planPickerAnnualBtnText}>
-                    Annual · {getIapPrice(IAP_PRODUCT_IDS.proAnnual, 'Subscribe')} · Save 44%
-                  </Text>
+                  <Text style={styles.planPickerAnnualBtnText}>Annual · Coming soon</Text>
                 </TouchableOpacity>
               </View>
             </View>
