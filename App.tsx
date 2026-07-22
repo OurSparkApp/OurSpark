@@ -5299,6 +5299,7 @@ export default function App() {
     RedHatDisplay_700Bold,
     Montserrat_400Regular,
   });
+  const [fontTimeout, setFontTimeout] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [appStage, setAppStage] = useState<AppStage>('marketing');
@@ -5317,6 +5318,11 @@ export default function App() {
   const invitePendingMainTabRef = useRef<keyof MainTabParamList | null>(null);
 
   appStageRef.current = appStage;
+
+  useEffect(() => {
+    const timer = setTimeout(() => setFontTimeout(true), 5000);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (appStage !== 'invite') {
@@ -5388,7 +5394,13 @@ export default function App() {
     let cancelled = false;
 
     void (async () => {
-      const { data } = await supabase.auth.getSession();
+      const sessionPromise = supabase.auth.getSession();
+      const timeoutPromise = new Promise((resolve) =>
+        setTimeout(() => resolve({ data: { session: null } }), 5000)
+      );
+      const { data } = (await Promise.race([sessionPromise, timeoutPromise])) as {
+        data: { session: Session | null };
+      };
       if (cancelled) {
         return;
       }
@@ -5466,7 +5478,7 @@ export default function App() {
     return () => clearTimeout(id);
   }, [appStage]);
 
-  if (!fontsLoaded && !fontError) {
+  if (!fontsLoaded && !fontError && !fontTimeout) {
     return <LoadingScreen />;
   }
 
