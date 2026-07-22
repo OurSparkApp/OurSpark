@@ -1,6 +1,13 @@
 import { Platform } from 'react-native';
-import type { CustomerInfo, PurchasesPackage } from 'react-native-purchases';
 import { supabase } from './supabase';
+
+type CustomerInfo = {
+  entitlements: { active: Record<string, unknown> };
+  allPurchasedProductIdentifiers?: string[];
+};
+type PurchasesPackage = {
+  product: { identifier: string; priceString: string };
+};
 
 export const PRO_ENTITLEMENT_ID = 'OurSpark Pro';
 
@@ -112,9 +119,9 @@ export async function purchaseProductById(
     throw new Error('This product is not available yet. Please try again in a moment.');
   }
 
-  const { customerInfo } = await Purchases.purchasePackage(aPackage);
-  await fulfillPurchase(productId, coupleId, userId, customerInfo);
-  return customerInfo;
+  const { customerInfo } = await Purchases.purchasePackage(aPackage as never);
+  await fulfillPurchase(productId, coupleId, userId, customerInfo as CustomerInfo);
+  return customerInfo as CustomerInfo;
 }
 
 export async function restoreIapPurchases(
