@@ -40,7 +40,6 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import Purchases, { LOG_LEVEL } from 'react-native-purchases';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Session } from '@supabase/supabase-js';
 import {
@@ -5368,18 +5367,20 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (Platform.OS === 'ios' && Platform.isPad) {
-      return;
-    }
     const timer = setTimeout(() => {
-      try {
-        Purchases.configure({
-          apiKey: 'appl_RlJXYiZtXubiCKuvWKCkNBdlIWm',
-        });
-        setIapReady(true);
-      } catch (err) {
-        console.warn('RevenueCat init failed', err);
-      }
+      void (async () => {
+        if (Platform.OS === 'ios' && !Platform.isPad) {
+          try {
+            const { default: Purchases } = await import('react-native-purchases');
+            Purchases.configure({
+              apiKey: 'appl_RlJXYiZtXubiCKuvWKCkNBdlIWm',
+            });
+            setIapReady(true);
+          } catch (err) {
+            console.warn('RevenueCat init failed', err);
+          }
+        }
+      })();
     }, 0);
     return () => clearTimeout(timer);
   }, []);

@@ -1,12 +1,11 @@
 import { Platform } from 'react-native';
-import Purchases, {
-  PURCHASES_ERROR_CODE,
-  type CustomerInfo,
-  type PurchasesPackage,
-} from 'react-native-purchases';
+import type { CustomerInfo, PurchasesPackage } from 'react-native-purchases';
 import { supabase } from './supabase';
 
 export const PRO_ENTITLEMENT_ID = 'OurSpark Pro';
+
+/** Matches RevenueCat PURCHASES_ERROR_CODE.PURCHASE_CANCELLED_ERROR without a runtime import. */
+const PURCHASE_CANCELLED_ERROR_CODE = '1';
 
 export type PendingIapPurchase = {
   productId: string;
@@ -60,11 +59,14 @@ export function isPurchaseCancelledError(err: unknown): boolean {
   if (maybe.userCancelled === true) {
     return true;
   }
-  return maybe.code === PURCHASES_ERROR_CODE.PURCHASE_CANCELLED_ERROR;
+  return maybe.code === PURCHASE_CANCELLED_ERROR_CODE;
 }
 
 /** Fetch RevenueCat offerings and cache packages by store product ID. */
 export async function fetchOfferingsAndCache(): Promise<void> {
+  if (Platform.OS !== 'ios' || Platform.isPad) return;
+  const { default: Purchases } = await import('react-native-purchases');
+
   if (!isIapSupported()) {
     return;
   }
@@ -96,6 +98,11 @@ export async function purchaseProductById(
   coupleId: string,
   userId: string
 ): Promise<CustomerInfo> {
+  if (Platform.OS !== 'ios' || Platform.isPad) {
+    throw new Error('In-app purchases are only available on iOS and Android.');
+  }
+  const { default: Purchases } = await import('react-native-purchases');
+
   if (!isIapSupported()) {
     throw new Error('In-app purchases are only available on iOS and Android.');
   }
@@ -116,6 +123,9 @@ export async function restoreIapPurchases(
   _proProductIds: string[] = proProductIds,
   _packProductIdToPackName: Record<string, string> = packProductIdToPackName
 ): Promise<{ restoredPro: boolean; restoredPackCount: number }> {
+  if (Platform.OS !== 'ios' || Platform.isPad) return { restoredPro: false, restoredPackCount: 0 };
+  const { default: Purchases } = await import('react-native-purchases');
+
   if (!isIapSupported()) {
     return { restoredPro: false, restoredPackCount: 0 };
   }
@@ -126,6 +136,9 @@ export async function restoreIapPurchases(
 
 /** Sync `couples.is_pro` from RevenueCat entitlements. */
 export async function syncProFromCustomerInfo(coupleId: string): Promise<boolean | null> {
+  if (Platform.OS !== 'ios' || Platform.isPad) return null;
+  const { default: Purchases } = await import('react-native-purchases');
+
   if (!isIapSupported()) {
     return null;
   }
