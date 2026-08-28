@@ -22,7 +22,6 @@
     "expo-dev-client": "~6.0.20",
     "expo-device": "~8.0.10",
     "expo-font": "~14.0.11",
-    "expo-in-app-purchases": "^14.5.0",
     "expo-media-library": "~18.2.1",
     "expo-notifications": "~0.32.16",
     "expo-secure-store": "~15.0.8",

@@ -26,7 +26,6 @@ import {
   Dimensions,
   Image,
   KeyboardAvoidingView,
-  Linking,
   Modal,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -51,58 +50,10 @@ import {
 // -- ALTER TABLE profiles ADD COLUMN IF NOT EXISTS push_token text;
 import { awardVaultKeeperIfFirstSave, checkAndAwardBadges } from './lib/badges';
 import { scheduledDateMatchesTodayMonthDay } from './lib/scheduledQuestion';
-import {
-  configureIapProductMaps,
-  getIapFormattedPrice,
-} from './lib/iap';
 import { supabase } from './lib/supabase';
 
-const IAP_PRODUCT_IDS = {
-  proMonthly: 'com.ourspark.app.promonthly',
-  proAnnual: 'com.ourspark.app.pro.annual',
-  sillyPack: 'com.ourspark.app.sillypack',
-  deepEnd: 'com.ourspark.app.deepend',
-  dreamLife: 'com.ourspark.app.dreamlife',
-  stillUs: 'com.ourspark.app.stilluspack',
-  spicyPack: 'com.ourspark.app.spicypack',
-  valentinesWeek: 'com.ourspark.app.valentinesweek',
-  stayingWarm: 'com.ourspark.app.stayingwarm',
-  summerHeat: 'com.ourspark.app.summerheat',
-  fallingForYou: 'com.ourspark.app.fallingforyou',
-  springForward: 'com.ourspark.app.springforward',
-  newYearNewUs: 'com.ourspark.app.newyearnewus',
-} as const;
-
-const PRO_IAP_PRODUCT_IDS = [IAP_PRODUCT_IDS.proMonthly, IAP_PRODUCT_IDS.proAnnual];
-
-/** Maps App Store product IDs to `packs.name` in Supabase. */
-const IAP_PACK_PRODUCT_ID_TO_PACK_NAME: Record<string, string> = {
-  [IAP_PRODUCT_IDS.sillyPack]: 'Silly Pack',
-  [IAP_PRODUCT_IDS.deepEnd]: 'The Deep End',
-  [IAP_PRODUCT_IDS.dreamLife]: 'Dream Life Pack',
-  [IAP_PRODUCT_IDS.stillUs]: 'Still Us Pack',
-  [IAP_PRODUCT_IDS.spicyPack]: 'Spicy Pack',
-  [IAP_PRODUCT_IDS.valentinesWeek]: "Valentine's Week",
-  [IAP_PRODUCT_IDS.stayingWarm]: 'Staying Warm',
-  [IAP_PRODUCT_IDS.summerHeat]: 'Summer Heat',
-  [IAP_PRODUCT_IDS.fallingForYou]: 'Falling For You',
-  [IAP_PRODUCT_IDS.springForward]: 'Spring Forward',
-  [IAP_PRODUCT_IDS.newYearNewUs]: 'New Year, New Us',
-};
-
-const PACK_NAME_TO_IAP_PRODUCT_ID: Record<string, string> = Object.fromEntries(
-  Object.entries(IAP_PACK_PRODUCT_ID_TO_PACK_NAME).map(([productId, packName]) => [packName, productId])
-);
-
-function getPackIapProductId(packName: string): string {
-  return PACK_NAME_TO_IAP_PRODUCT_ID[packName] ?? '';
-}
-
-configureIapProductMaps(PRO_IAP_PRODUCT_IDS, IAP_PACK_PRODUCT_ID_TO_PACK_NAME);
-
-const checkIsPro = async (coupleId: string): Promise<boolean> => {
-  const { data } = await supabase.from('couples').select('is_pro').eq('id', coupleId).maybeSingle();
-  return data?.is_pro === true;
+const checkIsPro = async (_coupleId: string): Promise<boolean> => {
+  return true;
 };
 
 /** Free tier: earnable without Pro (matches product names in UI). */
@@ -117,20 +68,7 @@ const PRO_LABEL_BADGE_NAMES = new Set([
   'Vault Keeper',
 ]);
 
-const NAVY = '#090236';
-const BG = '#F1E9D2';
-const LINEN = '#FAF6EE';
-const BORDER = '#E8DFC8';
-const PURPLE = '#841C67';
-const SAGE = '#7D9E8C';
-const CARD_BG = LINEN;
-const TEXT = NAVY;
-const TEXT_ON_DARK = '#F1E9D2';
-/** Dark surfaces (Wrapped modal, share cards) — navy is background only here. */
-const DARK_BG = '#090236';
-const DARK_CARD = '#0D0845';
-const CORAL_CTA = SAGE;
-const ORANGE = SAGE;
+const CORAL_CTA = '#F48F4F';
 
 function formatReflectionFreeTier(text: string): { preview: string; isTruncated: boolean } {
   const trimmed = text.trim();
@@ -154,9 +92,19 @@ type MainTabParamList = {
 
 const navigationRef = createNavigationContainerRef<MainTabParamList>();
 
+const BG = '#F1E9D2';
+const CREAM = '#F1E9D2';
+const PURPLE = '#841C67';
+const SAGE = '#7D9E8C';
+const ORANGE = '#7D9E8C';
+const CARD_BG = '#FAF6EE';
+const NAVY = '#090236';
+const BORDER = '#E8DFC8';
+const LINEN = '#FAF6EE';
+
 const FONT_HEADING = 'RedHatDisplay_700Bold';
 const FONT_BODY = 'Montserrat_400Regular';
-const HOME_LOGO = require('./assets/transparent_dark_font.png');
+const HOME_LOGO = require('./assets/OurSpark_Logo_White_font_for_dark_background.png');
 
 const Tab = createBottomTabNavigator();
 type AppStage = 'marketing' | 'auth' | 'personalization' | 'invite' | 'main';
@@ -586,80 +534,13 @@ const ANSWER_MATCH_STOP_WORDS = new Set([
   'at',
 ]);
 
-function normalizeAnswerForMatch(text: string): string {
-  return text.trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
 function tokenizeAnswerForMatch(text: string): string[] {
-  const normalized = normalizeAnswerForMatch(text);
-  return normalized
+  return text
+    .toLowerCase()
     .replace(/[^a-z0-9\s'-]/g, ' ')
     .split(/\s+/)
     .map((w) => w.replace(/^['']+|['']+$/g, ''))
     .filter((w) => w.length > 0 && !ANSWER_MATCH_STOP_WORDS.has(w));
-}
-
-function wordsForConsecutivePhrase(text: string): string[] {
-  return normalizeAnswerForMatch(text)
-    .split(/\s+/)
-    .map((w) => w.replace(/[^a-z0-9'-]/gi, ''))
-    .filter((w) => w.length > 0);
-}
-
-function hasThreeConsecutiveMatchingWords(a: string, b: string): boolean {
-  const wa = wordsForConsecutivePhrase(a);
-  const wb = wordsForConsecutivePhrase(b);
-  if (wa.length < 3 || wb.length < 3) {
-    return false;
-  }
-  for (let i = 0; i <= wa.length - 3; i++) {
-    for (let j = 0; j <= wb.length - 3; j++) {
-      if (wa[i] === wb[j] && wa[i + 1] === wb[j + 1] && wa[i + 2] === wb[j + 2]) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function levenshteinDistance(s: string, t: string): number {
-  const m = s.length;
-  const n = t.length;
-  if (m === 0) {
-    return n;
-  }
-  if (n === 0) {
-    return m;
-  }
-  const v0 = new Array<number>(n + 1);
-  const v1 = new Array<number>(n + 1);
-  for (let j = 0; j <= n; j++) {
-    v0[j] = j;
-  }
-  for (let i = 0; i < m; i++) {
-    v1[0] = i + 1;
-    for (let j = 0; j < n; j++) {
-      const cost = s.charCodeAt(i) === t.charCodeAt(j) ? 0 : 1;
-      v1[j + 1] = Math.min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost);
-    }
-    for (let j = 0; j <= n; j++) {
-      v0[j] = v1[j];
-    }
-  }
-  return v0[n];
-}
-
-function answerSimilarityRatio(a: string, b: string): number {
-  const s = normalizeAnswerForMatch(a);
-  const t = normalizeAnswerForMatch(b);
-  if (s.length === 0 && t.length === 0) {
-    return 1;
-  }
-  if (s.length === 0 || t.length === 0) {
-    return 0;
-  }
-  const d = levenshteinDistance(s, t);
-  return 1 - d / Math.max(s.length, t.length);
 }
 
 function countMatchingWordsBetweenAnswers(a: string, b: string): number {
@@ -684,13 +565,7 @@ function getAnswerMatchMeta(a: string, b: string): {
   labelColor: string;
 } {
   const matchWordCount = countMatchingWordsBetweenAnswers(a, b);
-  const na = normalizeAnswerForMatch(a);
-  const nb = normalizeAnswerForMatch(b);
-  const bothNonEmpty = na.length > 0 && nb.length > 0;
-  const isPerfect =
-    bothNonEmpty &&
-    (hasThreeConsecutiveMatchingWords(a, b) || answerSimilarityRatio(a, b) > 0.8);
-  if (isPerfect) {
+  if (matchWordCount >= 3) {
     return {
       tier: 'perfect',
       filledCircles: 5,
@@ -713,7 +588,7 @@ function getAnswerMatchMeta(a: string, b: string): {
     filledCircles: 2,
     label: 'Interesting...',
     matchWordCount,
-      labelColor: TEXT_ON_DARK,
+    labelColor: CREAM,
   };
 }
 
@@ -776,7 +651,7 @@ function MarketingHomeScreen({
 
 type DailyQuestionStatus = 'not_answered' | 'waiting' | 'reveal_ready';
 
-const WRAPPED_CORAL = SAGE;
+const WRAPPED_CORAL = '#F48F4F';
 const WRAPPED_HUMOUR_DEFAULT =
   'You two answered within 60 seconds of each other more than once this year. Were you sitting next to each other?';
 const WRAPPED_HUMOUR_WITTY = "If that wasn't on purpose, the universe is playing matchmaker.";
@@ -1034,14 +909,14 @@ function WrappedTeaserModal({
 
   return (
     <Modal visible={visible} animationType="fade" presentationStyle="fullScreen" onRequestClose={onClose}>
-      <View style={[styles.wrappedTeaserRoot, { backgroundColor: DARK_BG, paddingTop: insets.top }]}>
+      <View style={[styles.wrappedTeaserRoot, { backgroundColor: BG, paddingTop: insets.top }]}>
         <TouchableOpacity
           accessibilityLabel="Close"
           onPress={onClose}
           style={styles.wrappedTeaserClose}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <Ionicons name="close-outline" size={28} color={TEXT_ON_DARK} />
+          <Ionicons name="close-outline" size={28} color={NAVY} />
         </TouchableOpacity>
 
         <View style={styles.wrappedTeaserContent}>
@@ -1132,7 +1007,7 @@ function OurSparkWrappedModal({
       style={[styles.wrappedSaveBtn, { bottom: insets.bottom + 16 }]}
       onPress={() => void saveCard(shotIndex)}
     >
-      <Ionicons name="download-outline" size={20} color={lightIcon ? TEXT_ON_DARK : DARK_BG} />
+      <Ionicons name="download-outline" size={20} color={lightIcon ? CREAM : BG} />
     </TouchableOpacity>
   );
 
@@ -1171,7 +1046,7 @@ function OurSparkWrappedModal({
 
   return (
     <Modal visible={visible} animationType="fade" presentationStyle="fullScreen" onRequestClose={onClose}>
-      <View style={[styles.wrappedModalRoot, { backgroundColor: DARK_BG }]}>
+      <View style={[styles.wrappedModalRoot, { backgroundColor: BG }]}>
         <View style={[styles.wrappedHeaderBar, { paddingTop: insets.top + 8, minHeight: headerH }]}>
           <View style={styles.wrappedHeaderSide} />
           <View style={styles.wrappedDotsRow}>
@@ -1194,7 +1069,7 @@ function OurSparkWrappedModal({
               onPress={onClose}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-              <Ionicons name="close-outline" size={28} color={TEXT_ON_DARK} />
+              <Ionicons name="close-outline" size={28} color={NAVY} />
             </TouchableOpacity>
           </View>
         </View>
@@ -1221,7 +1096,7 @@ function OurSparkWrappedModal({
           >
             {cardShell(
               'w0',
-              DARK_BG,
+              BG,
               <View style={styles.wrappedCoverWrap}>
                 <View
                   pointerEvents="none"
@@ -1232,14 +1107,14 @@ function OurSparkWrappedModal({
                   style={[styles.wrappedGlowBR, { backgroundColor: WRAPPED_CORAL, bottom: -100, left: -80 }]}
                 />
                 <Image source={HOME_LOGO} style={styles.wrappedCoverLogo} resizeMode="contain" />
-                <Text style={[styles.wrappedCoverYear, { fontFamily: FONT_BODY, color: TEXT_ON_DARK }]}>
+                <Text style={[styles.wrappedCoverYear, { fontFamily: FONT_BODY, color: CREAM }]}>
                   Your {d.year}
                 </Text>
-                <Text style={[styles.wrappedCoverTitle, { fontFamily: FONT_HEADING, color: TEXT_ON_DARK }]}>
+                <Text style={[styles.wrappedCoverTitle, { fontFamily: FONT_HEADING, color: CREAM }]}>
                   Spark Story
                 </Text>
                 <View style={[styles.wrappedDividerOrange, { backgroundColor: WRAPPED_CORAL }]} />
-                <Text style={[styles.wrappedCoverTag, { fontFamily: FONT_BODY, color: TEXT_ON_DARK }]}>
+                <Text style={[styles.wrappedCoverTag, { fontFamily: FONT_BODY, color: CREAM }]}>
                   {"Keep the Spark"}
                 </Text>
                 <Text style={[styles.wrappedSwipeHint, { fontFamily: FONT_BODY, color: ORANGE }]}>
@@ -1255,7 +1130,7 @@ function OurSparkWrappedModal({
 
             {cardShell(
               'w1',
-              DARK_BG,
+              BG,
               <View style={styles.wrappedCardPad}>
                 <Text
                   style={[
@@ -1271,7 +1146,7 @@ function OurSparkWrappedModal({
                   </Text>
                   <Text style={[styles.wrappedScorePct, { fontFamily: FONT_HEADING, color: ORANGE }]}>%</Text>
                 </View>
-                <Text style={[styles.wrappedSyncSubtext, { fontFamily: FONT_BODY, color: TEXT_ON_DARK }]}>
+                <Text style={[styles.wrappedSyncSubtext, { fontFamily: FONT_BODY, color: CREAM }]}>
                   {syncScoreWrappedCopy(d.compatibilityScore)}
                 </Text>
                 <Text style={[styles.wrappedAbsFooter, footerUrlStyle, { color: PURPLE }]}>
@@ -1286,7 +1161,7 @@ function OurSparkWrappedModal({
 
             {cardShell(
               'w2',
-              LINEN,
+              CREAM,
               <View style={styles.wrappedCardPad}>
                 <Text
                   style={[
@@ -1303,8 +1178,8 @@ function OurSparkWrappedModal({
                   {d.bestQuestion}
                 </Text>
                 <View style={styles.wrappedAnswersRow}>
-                  <View style={[styles.wrappedAnsCardLeft, { backgroundColor: DARK_BG }]}>
-                    <Text style={[styles.wrappedAnsTextLight, { fontFamily: FONT_BODY, color: TEXT_ON_DARK }]}>
+                  <View style={[styles.wrappedAnsCardLeft, { backgroundColor: BG }]}>
+                    <Text style={[styles.wrappedAnsTextLight, { fontFamily: FONT_BODY, color: CREAM }]}>
                       {d.bestAnswer1}
                     </Text>
                   </View>
@@ -1329,7 +1204,7 @@ function OurSparkWrappedModal({
 
             {cardShell(
               'w3',
-              SAGE,
+              '#F48F4F',
               <View style={styles.wrappedCardPad}>
                 <Text
                   style={[
@@ -1382,7 +1257,7 @@ function OurSparkWrappedModal({
 
             {cardShell(
               'w4',
-              DARK_BG,
+              BG,
               <View style={styles.wrappedCardPad}>
                 <Text
                   style={[
@@ -1400,7 +1275,7 @@ function OurSparkWrappedModal({
                     styles.wrappedBodyCenter,
                     {
                       fontFamily: FONT_BODY,
-                      color: TEXT_ON_DARK,
+                      color: NAVY,
                       paddingHorizontal: 32,
                       paddingTop: 8,
                       lineHeight: 26,
@@ -1442,7 +1317,7 @@ function OurSparkWrappedModal({
 
             {cardShell(
               'w6',
-              DARK_BG,
+              '#090236',
               <View style={styles.wrappedCardPad}>
                 <Text
                   style={[
@@ -1490,11 +1365,9 @@ function OurSparkWrappedModal({
 
 function DashboardScreen({
   userId,
-  onOpenSubscriptionPlans,
   onNavigateToPartnerSetup,
 }: {
   userId: string;
-  onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
   onNavigateToPartnerSetup: () => void;
 }) {
   console.log('[DashboardScreen] component rendering, userId:', userId);
@@ -1511,9 +1384,8 @@ function DashboardScreen({
   const [coupleId, setCoupleId] = useState<string | null>(null);
   const [showAddPartnerLink, setShowAddPartnerLink] = useState(true);
   const [reflection, setReflection] = React.useState<string | null>(null);
-  const [isPro, setIsPro] = useState(false);
+  const [isPro, setIsPro] = useState(true);
   const [showWrapped, setShowWrapped] = useState(false);
-  const [showWrappedTeaser, setShowWrappedTeaser] = useState(false);
   const [wrappedData, setWrappedData] = useState<WrappedData | null>(null);
   const [wrappedLoading, setWrappedLoading] = useState(false);
   const [activePackLine, setActivePackLine] = useState<string | null>(null);
@@ -1528,12 +1400,6 @@ function DashboardScreen({
       .eq('id', uid)
       .maybeSingle();
     const cid = profile?.couple_id != null ? String(profile.couple_id) : null;
-    const pro = cid ? await checkIsPro(cid) : false;
-    if (!pro) {
-      setShowWrappedTeaser(true);
-      return;
-    }
-
     setShowWrapped(true);
     setWrappedLoading(true);
     const year = new Date().getFullYear();
@@ -2031,7 +1897,7 @@ function DashboardScreen({
             {todayStatus === 'not_answered' ? (
               <>
                 <View style={styles.dbTitleIconRow}>
-                  <Ionicons name="chatbubble-outline" size={20} color={TEXT} />
+                  <Ionicons name="chatbubble-outline" size={20} color={NAVY} />
                   <Text style={styles.dbTodayTitle}>Your question is waiting</Text>
                 </View>
                 <TouchableOpacity
@@ -2104,34 +1970,9 @@ function DashboardScreen({
               <Text style={styles.dbReflectionLabel}>{"THIS WEEK'S REFLECTION"}</Text>
             </View>
             {(() => {
-              if (isPro) {
-                return (
-                  <>
-                    <Text style={styles.dbReflectionBody}>{reflection}</Text>
-                    <Text style={styles.dbReflectionFooter}>Generated by OurSpark AI</Text>
-                  </>
-                );
-              }
-              const { preview, isTruncated } = formatReflectionFreeTier(reflection);
               return (
                 <>
-                  <Text style={styles.dbReflectionBody}>{preview}</Text>
-                  {isTruncated ? (
-                    <>
-                      <Text style={styles.dbReflectionEllipsis}>...</Text>
-                      <TouchableOpacity
-                        activeOpacity={0.85}
-                        onPress={() => {
-                          if (coupleId) {
-                            onOpenSubscriptionPlans(coupleId, userId);
-                          }
-                        }}
-                        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                      >
-                        <Text style={styles.dbReflectionReadFull}>Read your full reflection →</Text>
-                      </TouchableOpacity>
-                    </>
-                  ) : null}
+                  <Text style={styles.dbReflectionBody}>{reflection}</Text>
                   <Text style={styles.dbReflectionFooter}>Generated by OurSpark AI</Text>
                 </>
               );
@@ -2141,7 +1982,7 @@ function DashboardScreen({
 
         <TouchableOpacity activeOpacity={0.9} style={styles.dbVaultCard} onPress={() => navigation.navigate('Vault')}>
           <View style={styles.dbVaultTitleRow}>
-            <Ionicons name="heart-outline" size={22} color={TEXT} />
+            <Ionicons name="heart-outline" size={22} color={NAVY} />
             <Text style={styles.dbVaultTitle}>Your Spark Vault</Text>
           </View>
           {vaultCount > 0 ? (
@@ -2193,27 +2034,12 @@ function DashboardScreen({
 
       </ScrollView>
 
-      {showWrapped ? (
-        <OurSparkWrappedModal
-          visible
-          onClose={() => setShowWrapped(false)}
-          data={wrappedData}
-          loading={wrappedLoading}
-        />
-      ) : null}
-
-      {showWrappedTeaser ? (
-        <WrappedTeaserModal
-          visible
-          onClose={() => setShowWrappedTeaser(false)}
-          onUnlock={() => {
-            if (coupleId) {
-              onOpenSubscriptionPlans(coupleId, userId);
-            }
-          }}
-        />
-      ) : null}
-
+      <OurSparkWrappedModal
+        visible={showWrapped}
+        onClose={() => setShowWrapped(false)}
+        data={wrappedData}
+        loading={wrappedLoading}
+      />
     </SafeAreaView>
   );
 }
@@ -3140,15 +2966,15 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
     };
   }, []);
 
-  const isDailyRevealScreen =
-    !isSpicyPackActive && dailyLoadReady && canSubmitAnswer && dailyState === 'reveal';
-
   return (
     <SafeAreaView
       style={[
         styles.screen,
-        isSpicyPackActive ? { backgroundColor: '#7B1A1A' } : null,
-        isDailyRevealScreen ? styles.dailyRevealScreen : null,
+        isSpicyPackActive
+          ? { backgroundColor: '#7B1A1A' }
+          : dailyState === 'reveal'
+            ? { backgroundColor: PURPLE }
+            : null,
       ]}
       edges={['top']}
     >
@@ -3256,13 +3082,11 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
 
           {!isSpicyPackActive || spicyStage === 3 || spicyStage === 4 ? (
             <>
-          <Text style={[styles.todayLabel, isDailyRevealScreen && styles.dailyRevealLabel]}>
-            {"TODAY'S QUESTION"}
-          </Text>
-          <Text style={[styles.dateAccent, isDailyRevealScreen && styles.dailyRevealLabel]}>{todayLabel}</Text>
+          <Text style={styles.todayLabel}>{"TODAY'S QUESTION"}</Text>
+          <Text style={styles.dateAccent}>{todayLabel}</Text>
 
-          <View style={[styles.questionCard, isDailyRevealScreen && styles.dailyRevealQuestionCard]}>
-            <Text style={[styles.questionText, isDailyRevealScreen && styles.dailyRevealQuestionText]}>
+          <View style={styles.questionCard}>
+            <Text style={styles.questionText}>
               {needsAccountSetup ? 'Setting up your account...' : dailyQuestion}
             </Text>
           </View>
@@ -3272,7 +3096,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
               <TextInput
                 style={styles.answerInput}
                 placeholder="Type your answer here... dig deep"
-                placeholderTextColor={`${TEXT}66`}
+                placeholderTextColor={`${NAVY}99`}
                 value={answer}
                 onChangeText={setAnswer}
                 multiline
@@ -3280,7 +3104,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
               />
               <TouchableOpacity
                 activeOpacity={0.9}
-                style={[styles.inviteActionButton, { marginTop: 16 }]}
+                style={styles.inviteActionButton}
                 onPress={submitAnswer}
                 disabled={isSubmitting || !canSubmitAnswer}
               >
@@ -3298,7 +3122,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
           {dailyLoadReady && canSubmitAnswer && dailyState === 'reveal' ? (
             <View style={styles.revealWrap}>
               <View style={styles.revealHeadingRow}>
-                <Ionicons name="sparkles-outline" size={24} color={TEXT_ON_DARK} />
+                <Ionicons name="sparkles-outline" size={24} color={ORANGE} />
                 <Text style={styles.revealHeading}>Today&apos;s Reveal</Text>
               </View>
               <View style={styles.revealCard}>
@@ -3332,31 +3156,27 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
       >
         <Animated.View style={[styles.shareModalRoot, { opacity: perfectSyncOpacity }]}>
           <View style={styles.shareModalOverlay} />
-          <View style={styles.perfectSyncModalColumn}>
-            <TouchableOpacity
-              accessibilityLabel="Close"
-              activeOpacity={0.85}
-              style={styles.perfectSyncModalCloseBtn}
-              onPress={dismissPerfectSyncModal}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Ionicons name="close-outline" size={28} color={TEXT_ON_DARK} />
-            </TouchableOpacity>
+          <View style={styles.shareModalCenterColumn}>
             <ViewShot ref={perfectSyncCardRef} style={styles.perfectSyncCardWrap} options={{ format: 'png' }}>
               <View style={styles.perfectSyncGradientStack}>
-                <View style={styles.perfectSyncGradientTop}>
-                  <Image source={HOME_LOGO} style={styles.perfectSyncLogo} resizeMode="contain" />
-                  <Text style={styles.perfectSyncTitle}>Perfect Sync</Text>
+                <View style={styles.perfectSyncGradientTop} />
+                <View style={styles.perfectSyncGradientBottom} />
+              </View>
+              <View style={styles.perfectSyncCardContent}>
+                <Image source={HOME_LOGO} style={styles.perfectSyncLogo} resizeMode="contain" />
+                <View style={styles.perfectSyncCirclesRow}>
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <View key={i} style={styles.perfectSyncCircleFilled} />
+                  ))}
                 </View>
-                <View style={styles.perfectSyncGradientBottom}>
-                  <Text style={styles.perfectSyncSubtitle}>We answered as one</Text>
-                  <Text style={styles.perfectSyncDate}>{todayLabel}</Text>
-                  <View style={styles.shareCardDivider} />
-                  <Text style={styles.shareCardTagline}>
-                    {"Keep the Spark"}
-                  </Text>
-                  <Text style={styles.shareCardDomain}>oursparkapp.com</Text>
-                </View>
+                <Text style={styles.perfectSyncTitle}>Perfect Sync</Text>
+                <Text style={styles.perfectSyncSubtitle}>We answered as one</Text>
+                <Text style={styles.perfectSyncDate}>{todayLabel}</Text>
+                <View style={styles.shareCardDivider} />
+                <Text style={styles.shareCardTagline}>
+                  {"Keep the Spark"}
+                </Text>
+                <Text style={styles.shareCardDomain}>oursparkapp.com</Text>
               </View>
             </ViewShot>
             <TouchableOpacity
@@ -3367,7 +3187,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
               <Text style={styles.shareModalPrimaryButtonText}>Save to Camera Roll</Text>
             </TouchableOpacity>
             <TouchableOpacity activeOpacity={0.85} onPress={dismissPerfectSyncModal} style={styles.shareModalContinueWrap}>
-              <Text style={styles.shareModalContinueText}>Maybe Later</Text>
+              <Text style={styles.shareModalContinueText}>Continue</Text>
             </TouchableOpacity>
           </View>
         </Animated.View>
@@ -3385,7 +3205,7 @@ function DailyQuestionScreen({ userId }: { userId: string }) {
             <ViewShot ref={milestoneCardRef} style={styles.milestoneShareCardWrap} options={{ format: 'png' }}>
               <Image source={HOME_LOGO} style={styles.milestoneShareLogo} resizeMode="contain" />
               <View style={styles.milestoneShareRibbonWrap}>
-                <Ionicons name="ribbon-outline" size={70} color={SAGE} />
+                <Ionicons name="ribbon-outline" size={70} color="#F4A147" />
               </View>
               {milestoneData ? (
                 <>
@@ -3547,7 +3367,7 @@ function InviteStageTabBar({
           activeOpacity={0.7}
           onPress={() => onPressTab(name)}
         >
-          <Ionicons name={icon} size={24} color={`${TEXT}66`} />
+          <Ionicons name={icon} size={24} color={`${NAVY}99`} />
           <Text style={styles.inviteStageTabLabel}>{label}</Text>
         </TouchableOpacity>
       ))}
@@ -3710,7 +3530,7 @@ function InviteCodeScreen({
     }
     const six = inviteCode.slice(0, 6);
     await Share.share({
-      message: `Hey! Join me on OurSpark - our code is: ${six}. Download OurSpark on the App Store: https://apps.apple.com/us/app/ourspark/id6762099560`,
+      message: `Hey! Join me on OurSpark - our code is: ${six}. Download OurSpark on the App Store: https://apps.apple.com/app/ourspark/id[YOUR_APP_ID]`,
     });
   };
 
@@ -3790,7 +3610,7 @@ function InviteCodeScreen({
             <TextInput
               style={styles.authInput}
               placeholder="Enter your partner's code"
-              placeholderTextColor={`${TEXT}66`}
+              placeholderTextColor={`${NAVY}99`}
               value={joinCode}
               onChangeText={(text) => setJoinCode(text.toUpperCase())}
               autoCapitalize="characters"
@@ -3865,7 +3685,7 @@ function AuthScreen({
             <TextInput
               style={styles.authInput}
               placeholder="First Name"
-              placeholderTextColor={`${TEXT}66`}
+              placeholderTextColor={`${NAVY}99`}
               value={firstName}
               onChangeText={setFirstName}
             />
@@ -3874,7 +3694,7 @@ function AuthScreen({
           <TextInput
             style={styles.authInput}
             placeholder="Email"
-            placeholderTextColor={`${TEXT}66`}
+            placeholderTextColor={`${NAVY}99`}
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
@@ -3888,7 +3708,7 @@ function AuthScreen({
               value={password}
               onChangeText={setPassword}
               placeholder="Password"
-              placeholderTextColor={`${TEXT}33`}
+              placeholderTextColor={`${NAVY}55`}
               secureTextEntry={!showPassword}
               textContentType="oneTimeCode"
               autoComplete="off"
@@ -3901,7 +3721,7 @@ function AuthScreen({
               <Ionicons
                 name={showPassword ? 'eye-outline' : 'eye-off-outline'}
                 size={20}
-                color={TEXT_ON_DARK}
+                color={NAVY}
               />
             </TouchableOpacity>
           </View>
@@ -3961,19 +3781,12 @@ function formatBadgeEarnedDate(iso: string): string {
   }
 }
 
-function BadgesScreen({
-  userId,
-  onOpenSubscriptionPlans,
-}: {
-  userId: string;
-  onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
-}) {
+function BadgesScreen({ userId }: { userId: string }) {
   const [allBadges, setAllBadges] = useState<Record<string, unknown>[]>([]);
   const [coupleBadges, setCoupleBadges] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isPro, setIsPro] = useState(false);
+  const [isPro, setIsPro] = useState(true);
   const [hasCouple, setHasCouple] = useState(false);
-  const [coupleId, setCoupleId] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchBadges() {
@@ -3992,9 +3805,8 @@ function BadgesScreen({
         console.log('No user id; skipping badge fetches');
         setAllBadges([]);
         setCoupleBadges([]);
-        setIsPro(false);
+        setIsPro(true);
         setHasCouple(false);
-        setCoupleId(null);
         setLoading(false);
         return;
       }
@@ -4011,12 +3823,10 @@ function BadgesScreen({
       if (profile?.couple_id != null) {
         const cid = String(profile.couple_id);
         setHasCouple(true);
-        setCoupleId(cid);
         setIsPro(await checkIsPro(cid));
       } else {
         setHasCouple(false);
-        setCoupleId(null);
-        setIsPro(false);
+        setIsPro(true);
       }
 
       const { data: allBadgesData, error: badgesError } = await supabase.from('badges').select('*');
@@ -4123,8 +3933,6 @@ function BadgesScreen({
         >
           <View style={styles.badgesGrid}>
             {rows.map((item) => {
-              const isFreeBadge = FREE_BADGE_SLUGS.has(item.slug);
-
               return (
                 <View key={item.id} style={styles.badgeCell}>
                   {item.earned ? (
@@ -4140,7 +3948,7 @@ function BadgesScreen({
                         <Text style={styles.badgeDate}>{formatBadgeEarnedDate(item.earnedAt)}</Text>
                       ) : null}
                     </View>
-                  ) : isFreeBadge ? (
+                  ) : (
                     <View style={[styles.badgeCard, styles.badgeCardLocked]}>
                       <Ionicons
                         name={item.icon as keyof typeof Ionicons.glyphMap}
@@ -4151,33 +3959,11 @@ function BadgesScreen({
                       <Text style={styles.badgeNameFreePending}>{item.name}</Text>
                       <Text style={styles.badgeDescFreePending}>{item.description}</Text>
                     </View>
-                  ) : (
-                    <View style={[styles.badgeCard, styles.badgeCardProOnlyMinimal]}>
-                      <Text style={styles.badgeProOnlyName}>{item.name}</Text>
-                      <Ionicons name="lock-closed-outline" size={24} color={ORANGE} />
-                      {PRO_LABEL_BADGE_NAMES.has(item.name) ? (
-                        <Text style={styles.badgeProOnlyPill}>PRO</Text>
-                      ) : null}
-                    </View>
                   )}
                 </View>
               );
             })}
           </View>
-
-          {!isPro && hasCouple && coupleId ? (
-            <View style={styles.badgesProUpgradeCard}>
-              <Text style={styles.badgesProUpgradeTitle}>More badges dropping soon.</Text>
-              <Text style={styles.badgesProUpgradeBody}>Unlock every badge - for both of you.</Text>
-              <TouchableOpacity
-                activeOpacity={0.9}
-                style={styles.proUpgradeBtn}
-                onPress={() => onOpenSubscriptionPlans(coupleId, userId)}
-              >
-                <Text style={styles.proUpgradeBtnText}>Unlock Everything</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
         </ScrollView>
       )}
     </SafeAreaView>
@@ -4186,17 +3972,15 @@ function BadgesScreen({
 
 function VaultScreen({
   userId,
-  onOpenSubscriptionPlans,
 }: {
   userId: string;
-  onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
 }) {
   const navigation = useNavigation<BottomTabNavigationProp<any>>();
   const [loading, setLoading] = useState(true);
   const [moments, setMoments] = useState<VaultMomentDisplay[]>([]);
   const [firstVaultDateLabel, setFirstVaultDateLabel] = useState('');
   const [activeCoupleId, setActiveCoupleId] = useState<string | null>(null);
-  const [isPro, setIsPro] = useState(false);
+  const [isPro, setIsPro] = useState(true);
   const [hasCouple, setHasCouple] = useState(false);
   const [vaultPartnerSaidLabel, setVaultPartnerSaidLabel] = useState(`${PARTNER_HEADING_FALLBACK} said:`);
 
@@ -4211,7 +3995,7 @@ function VaultScreen({
     if (!profile?.couple_id) {
       setMoments([]);
       setFirstVaultDateLabel('');
-      setIsPro(false);
+      setIsPro(true);
       setHasCouple(false);
       setActiveCoupleId(null);
       setVaultPartnerSaidLabel(`${PARTNER_HEADING_FALLBACK} said:`);
@@ -4378,7 +4162,7 @@ function VaultScreen({
               <Text style={styles.vaultStatsFire}>{moments.length} Perfect Syncs</Text>
             </View>
             <View style={styles.vaultStatsRowRight}>
-              <Ionicons name="calendar-outline" size={16} color={TEXT} />
+              <Ionicons name="calendar-outline" size={16} color={NAVY} />
               <Text style={styles.vaultStatsSince}>Since {firstVaultDateLabel || '-'}</Text>
             </View>
           </View>
@@ -4392,7 +4176,7 @@ function VaultScreen({
 
         {!loading && moments.length === 0 ? (
           <View style={styles.vaultEmptyInner}>
-            <Ionicons name="heart-outline" size={60} color={TEXT} style={styles.vaultEmptyHeartIcon} />
+            <Ionicons name="heart-outline" size={60} color={NAVY} style={styles.vaultEmptyHeartIcon} />
             <Text style={styles.vaultEmptyTitle}>Your first Perfect Sync moment will live here</Text>
             <Text style={styles.vaultEmptySub}>
               {"Answer today's question together to start building your Vault"}
@@ -4431,25 +4215,6 @@ function VaultScreen({
             ))}
           </View>
         ) : null}
-
-        {!loading && hasCouple && !isPro ? (
-          <View style={styles.proUpgradeCard}>
-            <Text style={styles.proUpgradeTitle}>Your full story lives here.</Text>
-            <Text style={styles.proUpgradeBody}>Go Pro to keep moments longer than 7 days.</Text>
-            <TouchableOpacity
-              activeOpacity={0.9}
-              style={styles.proUpgradeBtn}
-              onPress={() => {
-                if (activeCoupleId) {
-                  onOpenSubscriptionPlans(activeCoupleId, userId);
-                }
-              }}
-            >
-              <Text style={styles.proUpgradeBtnText}>Unlock Everything</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
       </ScrollView>
     </SafeAreaView>
   );
@@ -4463,7 +4228,8 @@ type PackRow = {
   tagline: string;
   description: string;
   durationDays: number;
-  iapProductId: string;
+  priceLabel: string;
+  stripePriceId: string;
   isHoliday: boolean;
 };
 
@@ -4482,6 +4248,7 @@ function parsePackRow(raw: Record<string, unknown>): PackRow | null {
     return null;
   }
   const durationRaw = Number(raw.duration_days ?? raw.duration ?? 0);
+  const priceRaw = raw.price ?? raw.price_label ?? '$0';
   return {
     id: String(raw.id),
     name: typeof raw.name === 'string' ? raw.name : 'Pack',
@@ -4493,7 +4260,8 @@ function parsePackRow(raw: Record<string, unknown>): PackRow | null {
         ? raw.description
         : 'A daily path to help you reconnect one question at a time.',
     durationDays: Number.isFinite(durationRaw) && durationRaw > 0 ? Math.round(durationRaw) : 14,
-    iapProductId: getPackIapProductId(typeof raw.name === 'string' ? raw.name : 'Pack'),
+    priceLabel: typeof priceRaw === 'number' ? `$${priceRaw}` : String(priceRaw),
+    stripePriceId: typeof raw.stripe_price_id === 'string' ? raw.stripe_price_id : '',
     isHoliday: Boolean(raw.is_holiday),
   };
 }
@@ -4518,16 +4286,8 @@ function parseCouplePackRow(raw: Record<string, unknown>): CouplePackRow | null 
 
 function PacksScreen({
   userId,
-  onPurchase,
-  getIapPrice,
-  onRestorePurchases,
-  onLoadIapOfferings,
 }: {
   userId: string;
-  onPurchase: (productId: string, coupleId: string, userId: string) => Promise<void>;
-  getIapPrice: (productId: string, fallback?: string) => string;
-  onRestorePurchases: (coupleId: string, userId: string) => Promise<void>;
-  onLoadIapOfferings: () => Promise<boolean>;
 }) {
   const { width: screenWidth } = useWindowDimensions();
   const packCardWidth = (screenWidth - 48) / 2;
@@ -4539,7 +4299,6 @@ function PacksScreen({
   const [selectedPack, setSelectedPack] = useState<PackRow | null>(null);
   const [showPauseModal, setShowPauseModal] = useState(false);
   const [toastText, setToastText] = useState<string | null>(null);
-  const [offeringsStatus, setOfferingsStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   const showToast = useCallback((text: string) => {
     setToastText(text);
@@ -4587,18 +4346,7 @@ function PacksScreen({
   useFocusEffect(
     useCallback(() => {
       void loadPacks();
-      let cancelled = false;
-      setOfferingsStatus('loading');
-      void (async () => {
-        const ok = await onLoadIapOfferings();
-        if (!cancelled) {
-          setOfferingsStatus(ok ? 'ready' : 'error');
-        }
-      })();
-      return () => {
-        cancelled = true;
-      };
-    }, [loadPacks, onLoadIapOfferings])
+    }, [loadPacks])
   );
 
   const activeCouplePack = useMemo(() => {
@@ -4733,13 +4481,6 @@ function PacksScreen({
     [coupleId, couplePackByPackId, currentUserId, loadPacks, showToast]
   );
 
-  const packPriceLabel = (pack: PackRow): string => {
-    if (!pack.iapProductId) {
-      return 'Get Pack';
-    }
-    return getIapPrice(pack.iapProductId, 'Get Pack');
-  };
-
   const renderPackCard = (pack: PackRow) => {
     const cp = couplePackByPackId.get(pack.id);
     const isOwned = ownedPackIds.has(pack.id);
@@ -4750,15 +4491,7 @@ function PacksScreen({
         activeOpacity={0.9}
         style={[
           styles.packCard,
-          {
-            width: packCardWidth,
-            height: 180,
-            backgroundColor: LINEN,
-            borderWidth: 1,
-            borderColor: BORDER,
-            borderLeftWidth: 4,
-            borderLeftColor: pack.color,
-          },
+          { backgroundColor: pack.color, width: packCardWidth, height: 180 },
         ]}
         onPress={() => setSelectedPack(pack)}
       >
@@ -4771,7 +4504,7 @@ function PacksScreen({
           <View style={styles.packCardSpacer} />
         </View>
         <View style={styles.packCardBottomRow}>
-          <Text style={styles.packCardPrice}>{isOwned && !isActive ? 'Owned' : packPriceLabel(pack)}</Text>
+          <Text style={styles.packCardPrice}>{isOwned && !isActive ? 'Owned' : 'Free'}</Text>
           <Text style={styles.packCardDuration}>{pack.durationDays} days</Text>
         </View>
         {isOwned && !isActive ? (
@@ -4790,7 +4523,6 @@ function PacksScreen({
 
   const selectedCouplePack = selectedPack ? couplePackByPackId.get(selectedPack.id) ?? null : null;
   const selectedOwned = selectedPack ? ownedPackIds.has(selectedPack.id) : false;
-  const selectedIsPaused = Boolean(selectedCouplePack?.status === 'paused');
   const selectedIsActive = Boolean(selectedCouplePack?.status === 'active');
   const packsForGrid = useMemo(
     () =>
@@ -4812,24 +4544,7 @@ function PacksScreen({
         {activePack && activeCouplePack ? (
           <>
             <Text style={styles.packsSectionLabel}>ACTIVE PACK</Text>
-            <TouchableOpacity
-              activeOpacity={activeCouplePack.status === 'paused' ? 0.9 : 1}
-              style={[
-                styles.activePackCard,
-                {
-                  backgroundColor: `${PURPLE}18`,
-                  borderWidth: 1,
-                  borderColor: BORDER,
-                  borderLeftWidth: 4,
-                  borderLeftColor: activePack.color,
-                },
-              ]}
-              onPress={() => {
-                if (activeCouplePack.status === 'paused') {
-                  setSelectedPack(activePack);
-                }
-              }}
-            >
+            <View style={[styles.activePackCard, { backgroundColor: activePack.color }]}>
               <View style={styles.activePackTop}>
                 <Text style={styles.activePackEmoji}>{activePack.emoji}</Text>
                 <Text style={styles.activePackName}>{activePack.name}</Text>
@@ -4861,7 +4576,7 @@ function PacksScreen({
                   <Text style={[styles.activePackResumeBtnText, { color: activePack.color }]}>Resume Pack</Text>
                 </TouchableOpacity>
               ) : null}
-            </TouchableOpacity>
+            </View>
           </>
         ) : null}
 
@@ -4878,29 +4593,6 @@ function PacksScreen({
           <View style={styles.packsLoadingWrap}>
             <ActivityIndicator size="small" color={ORANGE} />
           </View>
-        ) : null}
-
-        {offeringsStatus === 'loading' ? (
-          <View style={styles.packsOfferingsLoadingWrap}>
-            <ActivityIndicator size="small" color={`${TEXT}66`} />
-            <Text style={styles.packsOfferingsLoadingText}>Connecting to the App Store…</Text>
-          </View>
-        ) : null}
-
-        {offeringsStatus === 'error' ? (
-          <Text style={styles.packsOfferingsErrorText}>
-            Unable to connect to the App Store. Please check your connection and try again.
-          </Text>
-        ) : null}
-
-        {coupleId ? (
-          <TouchableOpacity
-            activeOpacity={0.7}
-            style={styles.packsRestoreBtn}
-            onPress={() => void onRestorePurchases(coupleId, currentUserId)}
-          >
-            <Text style={styles.packsRestoreBtnText}>Restore Purchases</Text>
-          </TouchableOpacity>
         ) : null}
       </ScrollView>
 
@@ -4948,39 +4640,16 @@ function PacksScreen({
               </Text>
               <View style={styles.packDetailDivider} />
               <Text style={styles.packDetailDescription}>{selectedPack.description}</Text>
-              {!selectedOwned && selectedPack.iapProductId ? (
-                <Text style={styles.packDetailPrice}>{packPriceLabel(selectedPack)}</Text>
-              ) : null}
+              <Text style={styles.packDetailPrice}>Free</Text>
 
               {!selectedOwned ? (
                 <TouchableOpacity
                   activeOpacity={0.9}
-                  disabled
-                  style={[styles.packDetailPrimaryBtn, styles.packDetailPrimaryBtnDisabled]}
-                  onPress={() => {
-                    Alert.alert('Coming soon', 'In-app purchases will be available soon.');
-                  }}
+                  style={styles.packDetailPrimaryBtn}
+                  onPress={() => void startPack(selectedPack)}
                 >
-                  <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>
-                    Coming soon
-                  </Text>
+                  <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Activate</Text>
                 </TouchableOpacity>
-              ) : selectedIsPaused ? (
-                <>
-                  <View style={styles.packDetailDisabledBtn}>
-                    <Text style={styles.packDetailDisabledBtnText}>Paused</Text>
-                  </View>
-                  <TouchableOpacity
-                    activeOpacity={0.9}
-                    style={styles.packDetailPrimaryBtn}
-                    onPress={() => {
-                      void resumePack();
-                      setSelectedPack(null);
-                    }}
-                  >
-                    <Text style={[styles.packDetailPrimaryBtnText, { color: selectedPack.color }]}>Resume</Text>
-                  </TouchableOpacity>
-                </>
               ) : selectedIsActive ? (
                 <>
                   <View style={styles.packDetailDisabledBtn}>
@@ -5017,19 +4686,9 @@ function PacksScreen({
 
 function MainTabs({
   userId,
-  onPurchase,
-  onOpenSubscriptionPlans,
-  getIapPrice,
-  onRestorePurchases,
-  onLoadIapOfferings,
   onNavigateToPartnerSetup,
 }: {
   userId: string;
-  onPurchase: (productId: string, coupleId: string, userId: string) => Promise<void>;
-  onOpenSubscriptionPlans: (coupleId: string, userId: string) => void;
-  getIapPrice: (productId: string, fallback?: string) => string;
-  onRestorePurchases: (coupleId: string, userId: string) => Promise<void>;
-  onLoadIapOfferings: () => Promise<boolean>;
   onNavigateToPartnerSetup: () => void;
 }) {
   return (
@@ -5037,7 +4696,7 @@ function MainTabs({
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: BG,
+          backgroundColor: CARD_BG,
           borderTopColor: BORDER,
           borderTopWidth: StyleSheet.hairlineWidth,
           paddingTop: 6,
@@ -5048,7 +4707,7 @@ function MainTabs({
           fontSize: 12,
           letterSpacing: 0.3,
         },
-        tabBarActiveTintColor: PURPLE,
+        tabBarActiveTintColor: SAGE,
         tabBarInactiveTintColor: `${NAVY}66`,
       }}
     >
@@ -5062,7 +4721,6 @@ function MainTabs({
         {() => (
           <DashboardScreen
             userId={userId}
-            onOpenSubscriptionPlans={onOpenSubscriptionPlans}
             onNavigateToPartnerSetup={onNavigateToPartnerSetup}
           />
         )}
@@ -5083,15 +4741,7 @@ function MainTabs({
           tabBarIcon: ({ color }) => <Ionicons name="cube-outline" size={24} color={color} />,
         }}
       >
-        {() => (
-          <PacksScreen
-            userId={userId}
-            onPurchase={onPurchase}
-            getIapPrice={getIapPrice}
-            onRestorePurchases={onRestorePurchases}
-            onLoadIapOfferings={onLoadIapOfferings}
-          />
-        )}
+        {() => <PacksScreen userId={userId} />}
       </Tab.Screen>
       <Tab.Screen
         name="Vault"
@@ -5100,7 +4750,7 @@ function MainTabs({
           tabBarIcon: ({ color }) => <Ionicons name="heart-outline" size={24} color={color} />,
         }}
       >
-        {() => <VaultScreen userId={userId} onOpenSubscriptionPlans={onOpenSubscriptionPlans} />}
+        {() => <VaultScreen userId={userId} />}
       </Tab.Screen>
       <Tab.Screen
         name="Badges"
@@ -5109,7 +4759,7 @@ function MainTabs({
           tabBarIcon: ({ color }) => <Ionicons name="ribbon-outline" size={24} color={color} />,
         }}
       >
-        {() => <BadgesScreen userId={userId} onOpenSubscriptionPlans={onOpenSubscriptionPlans} />}
+        {() => <BadgesScreen userId={userId} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
@@ -5217,7 +4867,7 @@ function PersonalizationScreen({
               <TextInput
                 style={styles.dateInput}
                 placeholder="Day"
-                placeholderTextColor={`${TEXT}66`}
+                placeholderTextColor={`${NAVY}99`}
                 value={anniversaryDay}
                 onChangeText={setAnniversaryDay}
                 keyboardType="number-pad"
@@ -5225,7 +4875,7 @@ function PersonalizationScreen({
               <TextInput
                 style={styles.dateInput}
                 placeholder="Month"
-                placeholderTextColor={`${TEXT}66`}
+                placeholderTextColor={`${NAVY}99`}
                 value={anniversaryMonth}
                 onChangeText={setAnniversaryMonth}
                 keyboardType="number-pad"
@@ -5239,7 +4889,7 @@ function PersonalizationScreen({
               <TextInput
                 style={styles.dateInput}
                 placeholder="Day"
-                placeholderTextColor={`${TEXT}66`}
+                placeholderTextColor={`${NAVY}99`}
                 value={birthdayDay}
                 onChangeText={setBirthdayDay}
                 keyboardType="number-pad"
@@ -5247,7 +4897,7 @@ function PersonalizationScreen({
               <TextInput
                 style={styles.dateInput}
                 placeholder="Month"
-                placeholderTextColor={`${TEXT}66`}
+                placeholderTextColor={`${NAVY}99`}
                 value={birthdayMonth}
                 onChangeText={setBirthdayMonth}
                 keyboardType="number-pad"
@@ -5261,7 +4911,7 @@ function PersonalizationScreen({
               <TextInput
                 style={styles.dateInput}
                 placeholder="Day"
-                placeholderTextColor={`${TEXT}66`}
+                placeholderTextColor={`${NAVY}99`}
                 value={partnerBirthdayDay}
                 onChangeText={setPartnerBirthdayDay}
                 keyboardType="number-pad"
@@ -5269,7 +4919,7 @@ function PersonalizationScreen({
               <TextInput
                 style={styles.dateInput}
                 placeholder="Month"
-                placeholderTextColor={`${TEXT}66`}
+                placeholderTextColor={`${NAVY}99`}
                 value={partnerBirthdayMonth}
                 onChangeText={setPartnerBirthdayMonth}
                 keyboardType="number-pad"
@@ -5299,30 +4949,18 @@ export default function App() {
     RedHatDisplay_700Bold,
     Montserrat_400Regular,
   });
-  const [fontTimeout, setFontTimeout] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [appStage, setAppStage] = useState<AppStage>('marketing');
   const [inviteFromMainNav, setInviteFromMainNav] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [purchaseToast, setPurchaseToast] = useState<string | null>(null);
   const [mainTabsRefreshKey, setMainTabsRefreshKey] = useState(0);
-  const [showPlanPicker, setShowPlanPicker] = useState(false);
-  const [planPickerCoupleId, setPlanPickerCoupleId] = useState<string | null>(null);
-  const [planPickerUserId, setPlanPickerUserId] = useState<string | null>(null);
-  const [iapReady, setIapReady] = useState(false);
-  const [iapPricesVersion, setIapPricesVersion] = useState(0);
   const appStageRef = useRef(appStage);
   const pendingNavigateToQuestionRef = useRef(false);
   const invitePendingMainTabRef = useRef<keyof MainTabParamList | null>(null);
 
   appStageRef.current = appStage;
-
-  useEffect(() => {
-    const timer = setTimeout(() => setFontTimeout(true), 5000);
-    return () => clearTimeout(timer);
-  }, []);
 
   useEffect(() => {
     if (appStage !== 'invite') {
@@ -5335,72 +4973,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!purchaseToast) {
-      return;
-    }
-    const id = setTimeout(() => setPurchaseToast(null), 2500);
-    return () => clearTimeout(id);
-  }, [purchaseToast]);
-
-  const getIapPrice = useCallback(
-    (productId: string, fallback = '') => {
-      void iapPricesVersion;
-      return getIapFormattedPrice(productId, fallback);
-    },
-    [iapPricesVersion]
-  );
-
-  useEffect(() => {
-    // Purchases temporarily unavailable — RevenueCat removed.
-  }, []);
-
-  const loadIapOfferings = useCallback(async (): Promise<boolean> => {
-    // Purchases temporarily unavailable — skip store fetch.
-    return true;
-  }, []);
-
-  const syncSubscriptionForUser = useCallback(async (_userId: string) => {
-    // Purchases temporarily unavailable — RevenueCat removed.
-  }, []);
-
-  useEffect(() => {
-    if (!currentUserId || appStage !== 'main') {
-      return;
-    }
-    void syncSubscriptionForUser(currentUserId);
-  }, [appStage, currentUserId, syncSubscriptionForUser]);
-
-  const handlePurchase = useCallback(
-    async (_productId: string, _coupleId: string, _userId: string) => {
-      Alert.alert('Coming soon', 'In-app purchases will be available soon.');
-    },
-    []
-  );
-
-  const handleRestorePurchases = useCallback(
-    async (_coupleId?: string | null, _userId?: string | null) => {
-      Alert.alert('Coming soon', 'In-app purchases will be available soon.');
-    },
-    []
-  );
-
-  const openSubscriptionPlans = useCallback((coupleId: string, userId: string) => {
-    setPlanPickerCoupleId(coupleId);
-    setPlanPickerUserId(userId);
-    setShowPlanPicker(true);
-  }, []);
-
-  useEffect(() => {
     let cancelled = false;
 
     void (async () => {
-      const sessionPromise = supabase.auth.getSession();
-      const timeoutPromise = new Promise((resolve) =>
-        setTimeout(() => resolve({ data: { session: null } }), 5000)
-      );
-      const { data } = (await Promise.race([sessionPromise, timeoutPromise])) as {
-        data: { session: Session | null };
-      };
+      const { data } = await supabase.auth.getSession();
       if (cancelled) {
         return;
       }
@@ -5478,7 +5054,7 @@ export default function App() {
     return () => clearTimeout(id);
   }, [appStage]);
 
-  if (!fontsLoaded && !fontError && !fontTimeout) {
+  if (!fontsLoaded && !fontError) {
     return <LoadingScreen />;
   }
 
@@ -5497,16 +5073,11 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <NavigationContainer ref={navigationRef}>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         {appStage === 'main' ? (
           <MainTabs
             key={mainTabsRefreshKey}
             userId={currentUserId ?? ''}
-            onPurchase={handlePurchase}
-            onOpenSubscriptionPlans={openSubscriptionPlans}
-            getIapPrice={getIapPrice}
-            onRestorePurchases={(coupleId, userId) => handleRestorePurchases(coupleId, userId)}
-            onLoadIapOfferings={loadIapOfferings}
             onNavigateToPartnerSetup={() => {
               setInviteFromMainNav(true);
               setAppStage('invite');
@@ -5601,58 +5172,6 @@ export default function App() {
             onSwitchMode={() => setAuthMode((prev) => (prev === 'login' ? 'signup' : 'login'))}
           />
         )}
-        {showPlanPicker ? (
-          <Modal visible transparent animationType="fade" onRequestClose={() => setShowPlanPicker(false)}>
-            <View style={styles.planPickerOverlay}>
-              <View style={styles.planPickerCard}>
-                <View style={styles.planPickerHeaderRow}>
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    onPress={() => void handleRestorePurchases()}
-                  >
-                    <Text style={styles.planPickerRestoreText}>Restore Purchases</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    onPress={() => setShowPlanPicker(false)}
-                  >
-                    <Text style={styles.planPickerDismissText}>Maybe Later</Text>
-                  </TouchableOpacity>
-                </View>
-                <TouchableOpacity
-                  activeOpacity={0.9}
-                  disabled
-                  style={[styles.planPickerMonthlyBtn, { opacity: 0.5 }]}
-                  onPress={() => {
-                    Alert.alert('Coming soon', 'In-app purchases will be available soon.');
-                  }}
-                >
-                  <Text style={styles.planPickerMonthlyBtnText}>Monthly · Coming soon</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  activeOpacity={0.9}
-                  disabled
-                  style={[styles.planPickerAnnualBtn, { opacity: 0.5 }]}
-                  onPress={() => {
-                    Alert.alert('Coming soon', 'In-app purchases will be available soon.');
-                  }}
-                >
-                  <Text style={styles.planPickerAnnualBtnText}>Annual · Coming soon</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </Modal>
-        ) : null}
-        {purchaseToast ? (
-          <View style={styles.purchaseToastWrap} pointerEvents="none">
-            <View style={styles.purchaseToastInner}>
-              <Text style={styles.purchaseToastText}>{purchaseToast}</Text>
-            </View>
-          </View>
-        ) : null}
       </NavigationContainer>
     </SafeAreaProvider>
   );
@@ -5676,7 +5195,7 @@ const styles = StyleSheet.create({
   loadingHint: {
     fontFamily: FONT_BODY,
     fontSize: 22,
-    color: `${TEXT}88`,
+    color: `${NAVY}88`,
     letterSpacing: 2,
   },
   authScroll: {
@@ -5694,18 +5213,18 @@ const styles = StyleSheet.create({
   loginTagline: {
     fontFamily: FONT_BODY,
     fontSize: 18,
-    color: TEXT,
+    color: NAVY,
     textAlign: 'center',
     marginBottom: 26,
   },
   authInput: {
     backgroundColor: CARD_BG,
-    borderColor: BORDER,
+    borderColor: PURPLE,
     borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 14,
-    color: TEXT,
+    color: NAVY,
     fontFamily: FONT_BODY,
     fontSize: 15,
     marginBottom: 12,
@@ -5713,16 +5232,16 @@ const styles = StyleSheet.create({
   authPasswordRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: LINEN,
+    backgroundColor: CARD_BG,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: '#841C67',
     borderRadius: 12,
     marginBottom: 16,
     paddingHorizontal: 16,
   },
   authPasswordInput: {
     flex: 1,
-    color: TEXT,
+    color: NAVY,
     fontFamily: 'Montserrat_400Regular',
     fontSize: 16,
     paddingVertical: 14,
@@ -5737,17 +5256,17 @@ const styles = StyleSheet.create({
   },
   authEyeText: {
     fontSize: 18,
-    color: TEXT,
+    color: NAVY,
   },
   authButtonOuter: {
     width: '100%',
     height: 56,
     borderRadius: 28,
-    backgroundColor: PURPLE,
+    backgroundColor: '#F48F4F',
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 10,
-    shadowColor: PURPLE,
+    shadowColor: '#F48F4F',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
     shadowRadius: 16,
@@ -5756,12 +5275,12 @@ const styles = StyleSheet.create({
   authButtonText: {
     fontFamily: FONT_BODY,
     fontSize: 17,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     letterSpacing: 0.3,
   },
   authForgotText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 13,
     textAlign: 'center',
     marginTop: 10,
@@ -5769,7 +5288,7 @@ const styles = StyleSheet.create({
   },
   authSwitchText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 13,
     marginTop: 16,
     textAlign: 'center',
@@ -5796,14 +5315,14 @@ const styles = StyleSheet.create({
   },
   personalizationHeading: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 32,
     textAlign: 'center',
     marginBottom: 10,
   },
   personalizationSubheading: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     textAlign: 'center',
     lineHeight: 21,
@@ -5814,7 +5333,7 @@ const styles = StyleSheet.create({
   },
   dateSectionLabel: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     textAlign: 'center',
     fontSize: 15,
     marginBottom: 8,
@@ -5826,12 +5345,12 @@ const styles = StyleSheet.create({
   dateInput: {
     flex: 1,
     backgroundColor: CARD_BG,
-    borderColor: BORDER,
+    borderColor: PURPLE,
     borderWidth: 1,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 14,
-    color: TEXT,
+    color: NAVY,
     fontFamily: FONT_BODY,
     fontSize: 15,
     textAlign: 'center',
@@ -5840,11 +5359,11 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 56,
     borderRadius: 28,
-    backgroundColor: PURPLE,
+    backgroundColor: '#F48F4F',
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 10,
-    shadowColor: PURPLE,
+    shadowColor: '#F48F4F',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
     shadowRadius: 16,
@@ -5853,12 +5372,12 @@ const styles = StyleSheet.create({
   personalizationButtonText: {
     fontFamily: FONT_BODY,
     fontSize: 17,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     letterSpacing: 0.3,
   },
   personalizationSkip: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 13,
     marginTop: 12,
     textAlign: 'center',
@@ -5873,14 +5392,14 @@ const styles = StyleSheet.create({
   inviteHeading: {
     fontFamily: FONT_HEADING,
     fontSize: 34,
-    color: TEXT,
+    color: NAVY,
     textAlign: 'center',
     marginBottom: 10,
   },
   inviteSubheading: {
     fontFamily: FONT_BODY,
     fontSize: 15,
-    color: TEXT,
+    color: NAVY,
     textAlign: 'center',
     marginBottom: 24,
   },
@@ -5896,17 +5415,17 @@ const styles = StyleSheet.create({
   inviteActionButtonText: {
     fontFamily: FONT_BODY,
     fontSize: 16,
-    color: TEXT_ON_DARK,
+    color: CREAM,
   },
   invitePrimaryButton: {
     width: '100%',
     borderRadius: 14,
-    backgroundColor: SAGE,
+    backgroundColor: '#F48F4F',
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
-    shadowColor: SAGE,
+    shadowColor: '#F48F4F',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
     shadowRadius: 16,
@@ -5915,13 +5434,13 @@ const styles = StyleSheet.create({
   invitePrimaryButtonText: {
     fontFamily: FONT_BODY,
     fontSize: 16,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     letterSpacing: 0.3,
   },
   inviteGoDashboardLink: {
     fontFamily: FONT_BODY,
     fontSize: 13,
-    color: TEXT,
+    color: NAVY,
     opacity: 0.55,
     textAlign: 'center',
     paddingVertical: 8,
@@ -5952,7 +5471,7 @@ const styles = StyleSheet.create({
   generatedCodeTapHint: {
     fontFamily: FONT_BODY,
     fontSize: 12,
-    color: TEXT,
+    color: NAVY,
     marginTop: 8,
     marginBottom: 12,
   },
@@ -5965,8 +5484,8 @@ const styles = StyleSheet.create({
   },
   inviteStageTabBarRoot: {
     flexDirection: 'row',
-    backgroundColor: BG,
-    borderTopColor: BORDER,
+    backgroundColor: CARD_BG,
+    borderTopColor: `${PURPLE}55`,
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingTop: 6,
   },
@@ -5980,7 +5499,7 @@ const styles = StyleSheet.create({
     fontFamily: FONT_BODY,
     fontSize: 12,
     letterSpacing: 0.3,
-    color: `${NAVY}66`,
+    color: `${NAVY}99`,
     marginTop: 2,
   },
   orRow: {
@@ -5995,7 +5514,7 @@ const styles = StyleSheet.create({
   },
   orText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     marginHorizontal: 10,
     fontSize: 13,
   },
@@ -6011,7 +5530,7 @@ const styles = StyleSheet.create({
   },
   dbGreeting: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 28,
     textAlign: 'left',
     paddingTop: 60,
@@ -6029,15 +5548,15 @@ const styles = StyleSheet.create({
   dbTodayCard: {
     backgroundColor: CARD_BG,
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: BORDER,
     margin: 16,
     padding: 20,
+    borderWidth: 1,
+    borderColor: BORDER,
   },
   dbTodayCardGlow: {
     borderWidth: 2,
-    borderColor: SAGE,
-    shadowColor: SAGE,
+    borderColor: ORANGE,
+    shadowColor: ORANGE,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.45,
     shadowRadius: 14,
@@ -6076,7 +5595,7 @@ const styles = StyleSheet.create({
   },
   dbTodayTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 22,
     textAlign: 'center',
     marginBottom: 0,
@@ -6100,7 +5619,7 @@ const styles = StyleSheet.create({
   },
   dbWaitingSub: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     textAlign: 'center',
     marginBottom: 10,
@@ -6117,14 +5636,14 @@ const styles = StyleSheet.create({
     backgroundColor: PURPLE,
   },
   dbAnswerNowBtn: {
-    backgroundColor: SAGE,
+    backgroundColor: '#F48F4F',
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
   },
   dbAnswerNowText: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 16,
   },
   dbRevealReadyWrap: {
@@ -6139,7 +5658,7 @@ const styles = StyleSheet.create({
   },
   dbSeeRevealText: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 16,
   },
   dbStreakRow: {
@@ -6152,12 +5671,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: CARD_BG,
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: BORDER,
     padding: 16,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 140,
+    borderWidth: 1,
+    borderColor: BORDER,
   },
   dbStatEmoji: {
     fontSize: 28,
@@ -6175,24 +5694,24 @@ const styles = StyleSheet.create({
   },
   dbStatCaption: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 12,
     marginTop: 4,
     textAlign: 'center',
   },
   dbStatEmptyText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 12,
     textAlign: 'center',
   },
   dbReflectionCard: {
     backgroundColor: CARD_BG,
-    borderWidth: 1,
-    borderColor: BORDER,
     margin: 16,
     padding: 20,
     borderRadius: 16,
+    borderWidth: 1,
+    borderColor: BORDER,
   },
   dbReflectionLabelRow: {
     flexDirection: 'row',
@@ -6207,14 +5726,14 @@ const styles = StyleSheet.create({
   },
   dbReflectionBody: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 15,
     lineHeight: 24,
     marginTop: 8,
   },
   dbReflectionEllipsis: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 15,
     opacity: 0.5,
     marginTop: 4,
@@ -6227,18 +5746,18 @@ const styles = StyleSheet.create({
   },
   dbReflectionFooter: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 11,
     opacity: 0.4,
     marginTop: 12,
   },
   dbVaultCard: {
     backgroundColor: CARD_BG,
-    borderWidth: 1,
-    borderColor: BORDER,
     borderRadius: 16,
     margin: 16,
     padding: 20,
+    borderWidth: 1,
+    borderColor: BORDER,
   },
   dbVaultTitleRow: {
     flexDirection: 'row',
@@ -6249,7 +5768,7 @@ const styles = StyleSheet.create({
   },
   dbVaultTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 18,
     textAlign: 'center',
     marginBottom: 0,
@@ -6259,7 +5778,7 @@ const styles = StyleSheet.create({
   },
   dbVaultSub: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     textAlign: 'center',
     lineHeight: 20,
@@ -6296,7 +5815,7 @@ const styles = StyleSheet.create({
   tagline: {
     fontFamily: FONT_BODY,
     fontSize: 16,
-    color: TEXT,
+    color: NAVY,
     textAlign: 'center',
     letterSpacing: 0.2,
   },
@@ -6305,10 +5824,10 @@ const styles = StyleSheet.create({
     maxWidth: 340,
     height: 56,
     borderRadius: 28,
-    backgroundColor: PURPLE,
+    backgroundColor: '#F48F4F',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: PURPLE,
+    shadowColor: '#F48F4F',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
     shadowRadius: 16,
@@ -6331,13 +5850,13 @@ const styles = StyleSheet.create({
   homeCtaText: {
     fontFamily: FONT_BODY,
     fontSize: 17,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     letterSpacing: 0.4,
   },
   caption: {
     fontFamily: FONT_BODY,
     fontSize: 13,
-    color: TEXT,
+    color: NAVY,
     opacity: 0.85,
     textAlign: 'center',
     paddingHorizontal: 12,
@@ -6505,7 +6024,7 @@ const styles = StyleSheet.create({
   todayLabel: {
     fontFamily: FONT_BODY,
     fontSize: 12,
-    color: TEXT,
+    color: NAVY,
     letterSpacing: 3.2,
     textAlign: 'center',
     textTransform: 'uppercase',
@@ -6524,14 +6043,14 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingVertical: 22,
     paddingHorizontal: 20,
-    borderWidth: 1,
-    borderColor: BORDER,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: `${PURPLE}44`,
   },
   questionText: {
     fontFamily: FONT_BODY,
     fontSize: 18,
     lineHeight: 28,
-    color: TEXT,
+    color: NAVY,
     textAlign: 'center',
   },
   answerInput: {
@@ -6546,39 +6065,26 @@ const styles = StyleSheet.create({
     fontFamily: FONT_BODY,
     fontSize: 16,
     lineHeight: 22,
-    color: TEXT,
+    color: NAVY,
   },
   waitingWrap: {
     marginTop: 18,
     backgroundColor: CARD_BG,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: BORDER,
+    borderColor: `${PURPLE}55`,
     paddingVertical: 16,
     paddingHorizontal: 14,
   },
   waitingText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 15,
     textAlign: 'center',
   },
   revealWrap: {
     marginTop: 20,
     gap: 12,
-  },
-  dailyRevealScreen: {
-    backgroundColor: PURPLE,
-  },
-  dailyRevealLabel: {
-    color: TEXT_ON_DARK,
-  },
-  dailyRevealQuestionCard: {
-    backgroundColor: LINEN,
-    borderColor: BORDER,
-  },
-  dailyRevealQuestionText: {
-    color: TEXT,
   },
   revealHeadingRow: {
     flexDirection: 'row',
@@ -6589,7 +6095,7 @@ const styles = StyleSheet.create({
   },
   revealHeading: {
     fontFamily: FONT_HEADING,
-    color: TEXT_ON_DARK,
+    color: ORANGE,
     fontSize: 28,
     textAlign: 'center',
     marginBottom: 0,
@@ -6598,7 +6104,7 @@ const styles = StyleSheet.create({
     backgroundColor: CARD_BG,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: BORDER,
+    borderColor: `${PURPLE}55`,
     paddingVertical: 14,
     paddingHorizontal: 14,
   },
@@ -6616,7 +6122,7 @@ const styles = StyleSheet.create({
   },
   revealBodyText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 16,
     lineHeight: 23,
   },
@@ -6635,68 +6141,62 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     zIndex: 1,
   },
-  perfectSyncModalColumn: {
-    width: 320,
-    alignItems: 'stretch',
-    zIndex: 1,
-    position: 'relative',
-  },
-  perfectSyncModalCloseBtn: {
-    position: 'absolute',
-    right: 0,
-    top: -8,
-    zIndex: 4,
-    padding: 4,
-  },
   perfectSyncCardWrap: {
     width: 320,
     borderRadius: 24,
     borderWidth: 2,
-    borderColor: SAGE,
+    borderColor: '#F4A147',
     overflow: 'hidden',
     position: 'relative',
     minHeight: 360,
   },
   perfectSyncGradientStack: {
-    flex: 1,
-    minHeight: 360,
+    ...StyleSheet.absoluteFillObject,
     flexDirection: 'column',
   },
   perfectSyncGradientTop: {
     flex: 1,
-    backgroundColor: DARK_BG,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    paddingTop: 28,
-    paddingBottom: 20,
+    backgroundColor: '#090236',
   },
   perfectSyncGradientBottom: {
     flex: 1,
-    backgroundColor: LINEN,
+    backgroundColor: NAVY,
+  },
+  perfectSyncCardContent: {
+    padding: 32,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    paddingTop: 20,
-    paddingBottom: 28,
   },
   perfectSyncLogo: {
     width: 80,
     height: 80,
     alignSelf: 'center',
   },
+  perfectSyncCirclesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+  },
+  perfectSyncCircleFilled: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    margin: 4,
+    backgroundColor: '#F4A147',
+  },
   perfectSyncTitle: {
     fontFamily: FONT_HEADING,
-    color: SAGE,
+    color: '#F4A147',
     fontSize: 32,
     textAlign: 'center',
     marginTop: 12,
   },
   perfectSyncSubtitle: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: '#F1E9D2',
     fontSize: 16,
     textAlign: 'center',
+    marginTop: 8,
   },
   perfectSyncDate: {
     fontFamily: FONT_BODY,
@@ -6714,7 +6214,7 @@ const styles = StyleSheet.create({
   },
   shareCardTagline: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: '#F1E9D2',
     fontSize: 12,
     textAlign: 'center',
     opacity: 0.7,
@@ -6729,7 +6229,7 @@ const styles = StyleSheet.create({
   shareModalPrimaryButton: {
     width: '100%',
     borderRadius: 14,
-    backgroundColor: SAGE,
+    backgroundColor: '#F48F4F',
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
@@ -6737,7 +6237,7 @@ const styles = StyleSheet.create({
   },
   shareModalPrimaryButtonText: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 16,
   },
   shareModalContinueWrap: {
@@ -6747,7 +6247,7 @@ const styles = StyleSheet.create({
   },
   shareModalContinueText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: '#F1E9D2',
     fontSize: 15,
     textAlign: 'center',
   },
@@ -6809,7 +6309,7 @@ const styles = StyleSheet.create({
   },
   milestoneShareCardWrap: {
     width: 320,
-    backgroundColor: DARK_CARD,
+    backgroundColor: NAVY,
     borderRadius: 24,
     borderWidth: 2,
     borderColor: SAGE,
@@ -6827,28 +6327,28 @@ const styles = StyleSheet.create({
   },
   milestoneShareHeading: {
     fontFamily: FONT_HEADING,
-    color: SAGE,
+    color: '#F4A147',
     fontSize: 28,
     textAlign: 'center',
     marginTop: 12,
   },
   milestoneShareSubtext: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: '#F1E9D2',
     fontSize: 15,
     textAlign: 'center',
     marginTop: 8,
   },
   milestoneShareBigNumber: {
     fontFamily: FONT_HEADING,
-    color: SAGE,
+    color: '#F4A147',
     fontSize: 64,
     textAlign: 'center',
     marginTop: 8,
   },
   milestoneShareDaysLabel: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: '#F1E9D2',
     fontSize: 14,
     textAlign: 'center',
   },
@@ -6873,7 +6373,7 @@ const styles = StyleSheet.create({
   },
   badgesHeaderTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 28,
     textAlign: 'left',
     paddingTop: 60,
@@ -6921,6 +6421,8 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
     position: 'relative',
+    borderWidth: 1,
+    borderColor: BORDER,
   },
   badgeCardProOnlyMinimal: {
     justifyContent: 'center',
@@ -6929,7 +6431,7 @@ const styles = StyleSheet.create({
   },
   badgeProOnlyName: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     textAlign: 'center',
     opacity: 0.4,
@@ -6944,14 +6446,14 @@ const styles = StyleSheet.create({
   },
   badgeNameFreePending: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     textAlign: 'center',
     marginTop: 8,
   },
   badgeDescFreePending: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 11,
     textAlign: 'center',
     marginTop: 4,
@@ -6964,21 +6466,21 @@ const styles = StyleSheet.create({
   },
   badgeCardLocked: {
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: CARD_BG,
   },
   badgeIconLocked: {
     opacity: 0.4,
   },
   badgeNameEarned: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     textAlign: 'center',
     marginTop: 8,
   },
   badgeNameLocked: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     textAlign: 'center',
     marginTop: 8,
@@ -6986,7 +6488,7 @@ const styles = StyleSheet.create({
   },
   badgeDesc: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 11,
     textAlign: 'center',
     marginTop: 4,
@@ -7011,20 +6513,20 @@ const styles = StyleSheet.create({
   proUpgradeCard: {
     backgroundColor: CARD_BG,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: ORANGE,
     borderRadius: 16,
     padding: 20,
     margin: 16,
   },
   proUpgradeTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 18,
     textAlign: 'center',
   },
   proUpgradeBody: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     marginTop: 8,
     textAlign: 'center',
@@ -7041,7 +6543,7 @@ const styles = StyleSheet.create({
   },
   proUpgradeBtnText: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 16,
   },
   badgesProUpgradeCard: {
@@ -7051,18 +6553,18 @@ const styles = StyleSheet.create({
     padding: 20,
     backgroundColor: CARD_BG,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: ORANGE,
     borderRadius: 16,
   },
   badgesProUpgradeTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 18,
     textAlign: 'center',
   },
   badgesProUpgradeBody: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     marginTop: 8,
     textAlign: 'center',
@@ -7091,13 +6593,13 @@ const styles = StyleSheet.create({
   },
   wrappedTeaserHeadline: {
     fontFamily: FONT_HEADING,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 32,
     textAlign: 'center',
   },
   wrappedTeaserSub: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 16,
     textAlign: 'center',
     paddingHorizontal: 24,
@@ -7131,7 +6633,7 @@ const styles = StyleSheet.create({
   },
   wrappedTeaserCtaText: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 16,
     textAlign: 'center',
   },
@@ -7147,7 +6649,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: CARD_BG,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: ORANGE,
     borderRadius: 12,
     padding: 12,
   },
@@ -7155,7 +6657,7 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     flex: 1,
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
   },
   vaultScroll: {
@@ -7169,7 +6671,7 @@ const styles = StyleSheet.create({
   },
   vaultHeaderTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 28,
     textAlign: 'left',
     paddingTop: 60,
@@ -7211,7 +6713,7 @@ const styles = StyleSheet.create({
   },
   vaultStatsSince: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 13,
   },
   vaultLoadingWrap: {
@@ -7229,21 +6731,21 @@ const styles = StyleSheet.create({
   },
   vaultEmptyTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 22,
     textAlign: 'center',
     padding: 24,
   },
   vaultEmptySub: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 15,
     textAlign: 'center',
     padding: 16,
     lineHeight: 22,
   },
   vaultEmptyBtn: {
-    backgroundColor: SAGE,
+    backgroundColor: '#F48F4F',
     borderRadius: 14,
     paddingVertical: 14,
     paddingHorizontal: 24,
@@ -7251,7 +6753,7 @@ const styles = StyleSheet.create({
   },
   vaultEmptyBtnText: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 16,
   },
   vaultListWrap: {
@@ -7260,10 +6762,12 @@ const styles = StyleSheet.create({
   },
   vaultMomentCard: {
     position: 'relative',
-    backgroundColor: CARD_BG,
+    backgroundColor: LINEN,
     borderRadius: 16,
     margin: 12,
     padding: 20,
+    borderWidth: 1,
+    borderColor: BORDER,
     paddingTop: 28,
   },
   vaultCardCornerIcon: {
@@ -7281,7 +6785,7 @@ const styles = StyleSheet.create({
   },
   vaultCardDivider: {
     height: 1,
-    backgroundColor: BORDER,
+    backgroundColor: `${PURPLE}4D`,
     marginBottom: 12,
   },
   vaultAnswersRow: {
@@ -7307,13 +6811,13 @@ const styles = StyleSheet.create({
   },
   vaultAnswerBody: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 15,
     lineHeight: 22,
   },
   vaultCardDate: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 11,
     opacity: 0.6,
     textAlign: 'right',
@@ -7331,7 +6835,7 @@ const styles = StyleSheet.create({
   },
   dbWrappedTeaserTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 18,
     textAlign: 'center',
   },
@@ -7350,7 +6854,7 @@ const styles = StyleSheet.create({
   },
   dbAddPartnerLinkText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 12,
     opacity: 0.55,
     textAlign: 'center',
@@ -7372,14 +6876,14 @@ const styles = StyleSheet.create({
   },
   dbSignOutLinkText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 12,
     opacity: 0.5,
     textAlign: 'center',
   },
   dbAccountLinkSeparator: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 12,
     opacity: 0.5,
   },
@@ -7432,7 +6936,7 @@ const styles = StyleSheet.create({
   },
   wrappedSavedToastText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 16,
   },
   wrappedLoading: {
@@ -7669,7 +7173,7 @@ const styles = StyleSheet.create({
   },
   packsHeaderTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 28,
     textAlign: 'left',
     paddingTop: 60,
@@ -7714,13 +7218,13 @@ const styles = StyleSheet.create({
   },
   activePackName: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: '#FFFFFF',
     fontSize: 22,
     flex: 1,
   },
   activePackDayText: {
     fontFamily: FONT_BODY,
-    color: `${TEXT}B3`,
+    color: 'rgba(255,255,255,0.7)',
     fontSize: 14,
     marginTop: 10,
   },
@@ -7743,7 +7247,7 @@ const styles = StyleSheet.create({
   },
   activePackPausedText: {
     fontFamily: FONT_BODY,
-    color: `${TEXT}99`,
+    color: 'rgba(255,255,255,0.6)',
     fontSize: 12,
     marginTop: 8,
   },
@@ -7754,7 +7258,7 @@ const styles = StyleSheet.create({
   },
   activePackPauseBtnText: {
     fontFamily: FONT_BODY,
-    color: `${TEXT}99`,
+    color: 'rgba(255,255,255,0.6)',
     fontSize: 13,
   },
   activePackResumeBtn: {
@@ -7797,14 +7301,14 @@ const styles = StyleSheet.create({
   },
   packCardName: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: '#FFFFFF',
     fontSize: 15,
     lineHeight: 20,
     marginTop: 8,
   },
   packCardDescription: {
     fontFamily: FONT_BODY,
-    color: `${TEXT}A6`,
+    color: 'rgba(255,255,255,0.65)',
     fontSize: 11,
     lineHeight: 16,
     marginTop: 4,
@@ -7819,26 +7323,26 @@ const styles = StyleSheet.create({
   },
   packCardPrice: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: '#FFFFFF',
     fontSize: 16,
   },
   packCardDuration: {
     fontFamily: FONT_BODY,
-    color: `${TEXT}99`,
+    color: 'rgba(255,255,255,0.6)',
     fontSize: 11,
   },
   packOwnedBadge: {
     position: 'absolute',
     right: 10,
     top: 10,
-    backgroundColor: `${PURPLE}1A`,
+    backgroundColor: 'rgba(255,255,255,0.2)',
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
   packOwnedBadgeText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: '#FFFFFF',
     fontSize: 10,
   },
   packActiveBadge: {
@@ -7850,43 +7354,6 @@ const styles = StyleSheet.create({
   packsLoadingWrap: {
     paddingVertical: 20,
     alignItems: 'center',
-  },
-  packsOfferingsLoadingWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 24,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  packsOfferingsLoadingText: {
-    fontFamily: FONT_BODY,
-    fontSize: 13,
-    color: `${TEXT}66`,
-    textAlign: 'center',
-  },
-  packsOfferingsErrorText: {
-    fontFamily: FONT_BODY,
-    fontSize: 13,
-    color: `${TEXT}99`,
-    textAlign: 'center',
-    paddingHorizontal: 28,
-    paddingTop: 8,
-    paddingBottom: 4,
-    lineHeight: 20,
-  },
-  packsRestoreBtn: {
-    alignSelf: 'center',
-    paddingVertical: 20,
-    paddingHorizontal: 16,
-    marginBottom: 28,
-  },
-  packsRestoreBtnText: {
-    fontFamily: FONT_BODY,
-    fontSize: 14,
-    color: `${TEXT}99`,
-    textAlign: 'center',
-    textDecorationLine: 'underline',
   },
   pauseOverlay: {
     flex: 1,
@@ -7901,13 +7368,13 @@ const styles = StyleSheet.create({
   },
   pauseTitle: {
     fontFamily: FONT_HEADING,
-    color: TEXT,
+    color: NAVY,
     fontSize: 22,
     textAlign: 'center',
   },
   pauseBody: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 15,
     textAlign: 'center',
     lineHeight: 24,
@@ -7922,20 +7389,20 @@ const styles = StyleSheet.create({
   },
   pauseConfirmBtnText: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 15,
   },
   pauseCancelBtn: {
     marginTop: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: CREAM,
     paddingVertical: 13,
     alignItems: 'center',
   },
   pauseCancelBtnText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 15,
   },
   packDetailRoot: {
@@ -8054,7 +7521,7 @@ const styles = StyleSheet.create({
   },
   packToastText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     textAlign: 'center',
   },
@@ -8078,13 +7545,10 @@ const styles = StyleSheet.create({
   planPickerHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     marginBottom: 4,
   },
-  planPickerRestoreText: {
-    fontFamily: FONT_BODY,
-    fontSize: 14,
-    color: `${TEXT}66`,
+  planPickerHeaderSpacer: {
+    flex: 1,
   },
   planPickerDismissText: {
     fontFamily: FONT_BODY,
@@ -8093,25 +7557,25 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   planPickerMonthlyBtn: {
-    backgroundColor: PURPLE,
+    backgroundColor: '#F48F4F',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
   },
   planPickerMonthlyBtnText: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 16,
   },
   planPickerAnnualBtn: {
-    backgroundColor: SAGE,
+    backgroundColor: PURPLE,
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
   },
   planPickerAnnualBtnText: {
     fontFamily: FONT_BODY,
-    color: TEXT_ON_DARK,
+    color: NAVY,
     fontSize: 16,
   },
   purchaseToastWrap: {
@@ -8123,13 +7587,13 @@ const styles = StyleSheet.create({
   purchaseToastInner: {
     backgroundColor: CARD_BG,
     borderWidth: 1,
-    borderColor: BORDER,
+    borderColor: ORANGE,
     borderRadius: 12,
     padding: 14,
   },
   purchaseToastText: {
     fontFamily: FONT_BODY,
-    color: TEXT,
+    color: NAVY,
     fontSize: 14,
     textAlign: 'center',
   },

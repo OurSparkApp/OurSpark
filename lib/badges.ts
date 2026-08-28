@@ -137,9 +137,8 @@ export type CheckAndAwardBadgesParams = {
  * Runs after a successful couple stats update on reveal (STATE 3).
  * Awards: First Spark, streak milestones, Night Owls, Early Birds, In Sync.
  */
-async function isCouplePro(coupleId: string): Promise<boolean> {
-  const { data } = await supabase.from('couples').select('is_pro').eq('id', coupleId).maybeSingle();
-  return data?.is_pro === true;
+async function isCouplePro(_coupleId: string): Promise<boolean> {
+  return true;
 }
 
 export async function checkAndAwardBadges(params: CheckAndAwardBadgesParams): Promise<void> {
