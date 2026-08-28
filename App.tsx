@@ -1944,7 +1944,7 @@ function DashboardScreen({
             {currentStreak > 0 ? (
               <>
                 <Text style={styles.dbStatNumberStreak}>{currentStreak}</Text>
-                <Text style={styles.dbStatCaption}>days in sync</Text>
+                <Text style={styles.dbStatCaption}>{currentStreak === 1 ? 'day' : 'days'} in sync</Text>
               </>
             ) : (
               <Text style={styles.dbStatEmptyText}>Answer today to start your spark!</Text>
@@ -4491,7 +4491,12 @@ function PacksScreen({
         activeOpacity={0.9}
         style={[
           styles.packCard,
-          { backgroundColor: pack.color, width: packCardWidth, height: 180 },
+          {
+            backgroundColor: LINEN,
+            borderColor: pack.color,
+            width: packCardWidth,
+            height: 180,
+          },
         ]}
         onPress={() => setSelectedPack(pack)}
       >
@@ -7215,6 +7220,7 @@ const styles = StyleSheet.create({
   },
   activePackEmoji: {
     fontSize: 32,
+    lineHeight: 36,
   },
   activePackName: {
     fontFamily: FONT_HEADING,
@@ -7279,6 +7285,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     rowGap: 8,
+    marginTop: 12,
     marginBottom: 4,
   },
   packGridAfterActive: {
@@ -7290,6 +7297,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     flexDirection: 'column',
     justifyContent: 'space-between',
+    borderWidth: 1.5,
   },
   packCardContent: {
     flex: 1,
@@ -7298,17 +7306,18 @@ const styles = StyleSheet.create({
   },
   packCardEmoji: {
     fontSize: 24,
+    lineHeight: 28,
   },
   packCardName: {
     fontFamily: FONT_HEADING,
-    color: '#FFFFFF',
+    color: NAVY,
     fontSize: 15,
     lineHeight: 20,
     marginTop: 8,
   },
   packCardDescription: {
     fontFamily: FONT_BODY,
-    color: 'rgba(255,255,255,0.65)',
+    color: `${NAVY}99`,
     fontSize: 11,
     lineHeight: 16,
     marginTop: 4,
@@ -7323,26 +7332,26 @@ const styles = StyleSheet.create({
   },
   packCardPrice: {
     fontFamily: FONT_HEADING,
-    color: '#FFFFFF',
+    color: NAVY,
     fontSize: 16,
   },
   packCardDuration: {
     fontFamily: FONT_BODY,
-    color: 'rgba(255,255,255,0.6)',
+    color: `${NAVY}99`,
     fontSize: 11,
   },
   packOwnedBadge: {
     position: 'absolute',
     right: 10,
     top: 10,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: `${NAVY}14`,
     borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
   packOwnedBadgeText: {
     fontFamily: FONT_BODY,
-    color: '#FFFFFF',
+    color: NAVY,
     fontSize: 10,
   },
   packActiveBadge: {
@@ -7421,7 +7430,9 @@ const styles = StyleSheet.create({
   },
   packDetailEmoji: {
     fontSize: 64,
-    marginTop: 80,
+    lineHeight: 72,
+    marginTop: 108,
+    textAlign: 'center',
   },
   packDetailName: {
     fontFamily: FONT_HEADING,

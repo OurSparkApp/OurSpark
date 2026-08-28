@@ -28,7 +28,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#090236"
+        "backgroundColor": "#F1E9D2"
       },
       "package": "com.ourspark.app",
       "edgeToEdgeEnabled": true,
