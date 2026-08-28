@@ -5641,7 +5641,7 @@ const styles = StyleSheet.create({
     backgroundColor: PURPLE,
   },
   dbAnswerNowBtn: {
-    backgroundColor: '#F48F4F',
+    backgroundColor: SAGE,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
